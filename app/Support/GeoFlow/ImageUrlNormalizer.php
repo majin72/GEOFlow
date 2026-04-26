@@ -37,14 +37,14 @@ final class ImageUrlNormalizer
         }
 
         if (str_starts_with($withoutLeadingSlash, 'storage/')) {
-            return asset($withoutLeadingSlash);
+            return self::toConfiguredPublicPath($withoutLeadingSlash);
         }
 
         if (str_starts_with($withoutLeadingSlash, 'uploads/')) {
-            return asset('storage/'.$withoutLeadingSlash);
+            return self::toConfiguredPublicPath('storage/'.$withoutLeadingSlash);
         }
 
-        return asset(ltrim($withoutLeadingSlash, '/'));
+        return self::toConfiguredPublicPath($withoutLeadingSlash);
     }
 
     /**
@@ -55,5 +55,17 @@ final class ImageUrlNormalizer
         $alt = trim($alt);
 
         return preg_match('/^[^\/\\\\]+\.(?:png|jpe?g|gif|webp|svg|avif)$/iu', $alt) === 1 ? '' : $alt;
+    }
+
+    /**
+     * 根据 APP_URL 的路径部分生成公开路径，避免将域名写入文章内容。
+     */
+    private static function toConfiguredPublicPath(string $path): string
+    {
+        $publicPath = ltrim($path, '/');
+        $configuredPath = parse_url((string) config('app.url', ''), PHP_URL_PATH);
+        $basePath = trim(is_string($configuredPath) ? $configuredPath : '', '/');
+
+        return '/'.($basePath !== '' ? $basePath.'/' : '').$publicPath;
     }
 }
