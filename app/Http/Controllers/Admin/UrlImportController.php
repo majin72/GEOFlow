@@ -12,6 +12,7 @@ use App\Services\GeoFlow\UrlImportProcessingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\View\View;
 
@@ -211,28 +212,20 @@ class UrlImportController extends Controller
         return is_array($decoded) ? $decoded : [];
     }
 
+    /**
+     * 通过 Artisan 在当前 PHP 进程内执行 `geoflow:process-url-import`，避免 `exec` 与 `PHP_BINARY` 指向 `php-fpm` 等问题。
+     *
+     * @return bool 子命令退出码为 0 时为 true；为 false 时 {@see run} 将回退为 {@see UrlImportProcessingService::process}
+     */
     private function spawnUrlImportWorker(int $jobId): bool
     {
-        if (! function_exists('exec')) {
+        try {
+            $exitCode = Artisan::call('geoflow:process-url-import', [
+                'jobId' => (string) $jobId,
+            ]);
+        } catch (\Throwable) {
             return false;
         }
-
-        $phpBinary = PHP_BINARY ?: 'php';
-        if (str_contains(basename($phpBinary), 'php-fpm')) {
-            $phpBinary = 'php';
-        }
-
-        $command = sprintf(
-            '%s %s geoflow:process-url-import %d > %s 2>&1 & echo $!',
-            escapeshellarg($phpBinary),
-            escapeshellarg(base_path('artisan')),
-            $jobId,
-            escapeshellarg(storage_path('logs/url-import-worker-'.$jobId.'.log'))
-        );
-
-        $output = [];
-        $exitCode = 0;
-        exec($command, $output, $exitCode);
 
         return $exitCode === 0;
     }
