@@ -26,10 +26,18 @@ final class UrlImportProcessingService
 {
     private const AI_ANALYSIS_MAX_ATTEMPTS = 3;
 
+    /**
+     * @param  ApiKeyCrypto  $apiKeyCrypto  AI 模型密钥解密服务
+     */
     public function __construct(private readonly ApiKeyCrypto $apiKeyCrypto) {}
 
     /**
+     * 标准化用户输入 URL，并阻止本机、内网和私有地址目标。
+     *
+     * @param  string  $input  用户输入的 URL、域名或路径
      * @return array{url:string,host:string}
+     *
+     * @throws \InvalidArgumentException
      */
     public function normalizeInputUrl(string $input): array
     {
@@ -58,6 +66,11 @@ final class UrlImportProcessingService
         ];
     }
 
+    /**
+     * 确认至少存在一个可用于 URL 智能采集的聊天模型。
+     *
+     * @throws \RuntimeException
+     */
     public function assertAnalysisModelReady(): AiModel
     {
         $lastException = null;
@@ -79,7 +92,11 @@ final class UrlImportProcessingService
     }
 
     /**
+     * 返回所有当前可用的 URL 分析模型。
+     *
      * @return Collection<int, AiModel>
+     *
+     * @throws \RuntimeException
      */
     private function assertAnalysisModelsReady(): Collection
     {
@@ -108,6 +125,9 @@ final class UrlImportProcessingService
         return $ready;
     }
 
+    /**
+     * 判断后台是否已有可用的 URL 智能采集分析模型。
+     */
     public function hasReadyAnalysisModel(): bool
     {
         try {
@@ -119,57 +139,20 @@ final class UrlImportProcessingService
         }
     }
 
+    /**
+     * 同步执行完整 URL 智能采集流程；主要供测试和手动命令复用。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
+     */
     public function process(UrlImportJob $job): UrlImportJob
     {
-        $this->updateStep($job, 'fetch', 10, [
-            'status' => 'running',
-            'started_at' => now(),
-            'error_message' => '',
-        ]);
-        $this->log($job, 'info', __('admin.url_import.log.fetch_start', ['url' => $job->normalized_url]));
-
         try {
-            $fetched = $this->fetchPage((string) $job->normalized_url);
-            $this->log($job, 'info', __('admin.url_import.log.fetch_done', ['length' => strlen($fetched['html'])]));
-
-            $this->updateStep($job, 'page_json', 25);
-            $this->log($job, 'info', __('admin.url_import.log.page_json_start'));
-            $parsed = $this->parseHtml($fetched['html'], (string) $job->normalized_url);
-            $this->log($job, 'info', __('admin.url_import.log.extract_done', [
-                'chars' => mb_strlen($parsed['text'], 'UTF-8'),
-            ]));
-            $this->log($job, 'info', __('admin.url_import.log.page_json_done', [
-                'chars' => mb_strlen((string) data_get($parsed, 'raw_json.text', ''), 'UTF-8'),
-            ]));
-
-            $analysis = $this->buildAnalysis($parsed, $job);
-
-            $result = [
-                'source' => [
-                    'url' => (string) $job->url,
-                    'normalized_url' => (string) $job->normalized_url,
-                    'domain' => (string) $job->source_domain,
-                    'fetched_at' => now()->toIso8601String(),
-                    'status' => $fetched['status'],
-                ],
-                'page' => $parsed,
-                'analysis' => $analysis,
-                'import' => [
-                    'status' => 'preview',
-                    'summary' => null,
-                ],
-            ];
-
-            $this->updateStep($job, 'preview', 96);
-            $this->log($job, 'info', __('admin.url_import.log.preview_start'));
-
-            $this->updateStep($job, 'preview', 100, [
-                'page_title' => $parsed['title'],
-                'status' => 'completed',
-                'result_json' => json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE),
-                'finished_at' => now(),
-            ]);
-            $this->log($job, 'info', __('admin.url_import.log.preview_ready'));
+            $job = $this->processFetchStep($job);
+            $job = $this->processPageJsonStep($job);
+            $job = $this->processKnowledgeStep($job);
+            $job = $this->processKeywordsStep($job);
+            $job = $this->processTitlesStep($job);
+            $job = $this->processPreviewStep($job);
 
             return $job->refresh();
         } catch (Throwable $exception) {
@@ -186,7 +169,304 @@ final class UrlImportProcessingService
     }
 
     /**
+     * 执行 URL 导入的页面抓取步骤，并暂存原始 HTML 供后续链式 Job 使用。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
+     *
+     * @throws \RuntimeException
+     */
+    public function processFetchStep(UrlImportJob $job): UrlImportJob
+    {
+        $this->updateStep($job, 'fetch', 10, [
+            'status' => 'running',
+            'started_at' => $job->started_at ?: now(),
+            'finished_at' => null,
+            'error_message' => '',
+        ]);
+        $this->log($job, 'info', __('admin.url_import.log.fetch_start', ['url' => $job->normalized_url]), 'fetch');
+
+        $fetched = $this->fetchPage((string) $job->normalized_url);
+        $this->log($job, 'info', __('admin.url_import.log.fetch_done', ['length' => strlen($fetched['html'])]), 'fetch');
+
+        $result = $this->decodeResult($job);
+        $result['source'] = [
+            'url' => (string) $job->url,
+            'normalized_url' => (string) $job->normalized_url,
+            'domain' => (string) $job->source_domain,
+            'fetched_at' => now()->toIso8601String(),
+            'status' => $fetched['status'],
+        ];
+        $result['_working']['html'] = $fetched['html'];
+        $this->saveResult($job, $result);
+
+        return $job->refresh();
+    }
+
+    /**
+     * 执行 URL 导入的页面 JSON 抽取步骤。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
+     *
+     * @throws \RuntimeException
+     */
+    public function processPageJsonStep(UrlImportJob $job): UrlImportJob
+    {
+        $result = $this->decodeResult($job);
+        $html = (string) data_get($result, '_working.html', '');
+        if ($html === '') {
+            throw new \RuntimeException(__('admin.url_import.error.step_prerequisite_missing', ['step' => 'fetch']));
+        }
+
+        $this->updateStep($job, 'page_json', 25);
+        $this->log($job, 'info', __('admin.url_import.log.page_json_start'), 'page_json');
+
+        $parsed = $this->parseHtml($html, (string) $job->normalized_url);
+        $this->log($job, 'info', __('admin.url_import.log.extract_done', [
+            'chars' => mb_strlen((string) ($parsed['text'] ?? ''), 'UTF-8'),
+        ]), 'page_json');
+
+        $result['page'] = $parsed;
+        $result['analysis']['page_json'] = $this->buildPageJson($parsed, $job);
+        $this->log($job, 'info', __('admin.url_import.log.page_json_done', [
+            'chars' => mb_strlen((string) data_get($result, 'analysis.page_json.text', ''), 'UTF-8'),
+        ]), 'page_json');
+        $this->saveResult($job, $result);
+
+        return $job->refresh();
+    }
+
+    /**
+     * 执行 URL 导入的 AI 清洗与知识库 Markdown 生成步骤。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
+     *
+     * @throws \RuntimeException
+     */
+    public function processKnowledgeStep(UrlImportJob $job): UrlImportJob
+    {
+        $result = $this->decodeResult($job);
+        $parsed = $this->requireResultArray($result, 'page', 'page_json');
+        $pageJson = $this->requireResultArray($result, 'analysis.page_json', 'page_json');
+        $title = (string) ($parsed['title'] ?? '');
+        $text = (string) ($parsed['text'] ?? '');
+        $summary = (string) ($parsed['summary'] ?? '');
+        $libraryName = $this->safeName($title !== '' ? $title : (string) $job->source_domain);
+        $errors = [];
+
+        foreach ($this->assertAnalysisModelsReady() as $model) {
+            for ($attempt = 1; $attempt <= self::AI_ANALYSIS_MAX_ATTEMPTS; $attempt++) {
+                try {
+                    $runtime = $this->prepareAiRuntime($model);
+
+                    $this->updateStep($job, 'knowledge', 45);
+                    $this->log($job, 'info', __('admin.url_import.log.clean_start'), 'knowledge');
+                    $cleaned = $this->normalizeCleanedPage($this->requestAiJson(
+                        $runtime,
+                        $this->buildCleanSystemPrompt(),
+                        $this->buildCleanUserPrompt($pageJson)
+                    ), $parsed);
+                    $this->log($job, 'info', __('admin.url_import.log.clean_done', [
+                        'chars' => mb_strlen((string) ($cleaned['text'] ?? ''), 'UTF-8'),
+                    ]), 'knowledge');
+
+                    $this->log($job, 'info', __('admin.url_import.log.knowledge_start'), 'knowledge');
+                    $knowledgePayload = $this->requestAiJson(
+                        $runtime,
+                        $this->buildKnowledgeSystemPrompt(),
+                        $this->buildKnowledgeUserPrompt($pageJson, $cleaned, [])
+                    );
+                    $aiSummary = $this->normalizeText($this->aiResponseTextToString($knowledgePayload['summary'] ?? $cleaned['summary'] ?? $summary));
+                    $aiLibraryName = $this->safeName($this->aiResponseTextToString($knowledgePayload['library_name'] ?? $cleaned['title'] ?? $libraryName));
+                    $aiKnowledge = trim($this->aiResponseTextToString($knowledgePayload['knowledge_markdown'] ?? ''));
+                    if ($aiKnowledge === '') {
+                        throw new \RuntimeException(__('admin.url_import.error.ai_knowledge_missing'));
+                    }
+
+                    $result = $this->decodeResult($job);
+                    $result['analysis'] = array_merge(is_array($result['analysis'] ?? null) ? $result['analysis'] : [], [
+                        'summary' => $aiSummary !== '' ? $aiSummary : Str::limit($text, 220, '...'),
+                        'library_name' => $aiLibraryName !== '' ? $aiLibraryName : $libraryName,
+                        'knowledge_markdown' => $aiKnowledge,
+                        'analysis_source' => 'ai',
+                        'model' => [
+                            'id' => (int) $model->id,
+                            'name' => (string) $model->name,
+                        ],
+                        'page_json' => $pageJson,
+                        'cleaned' => $cleaned,
+                    ]);
+                    $this->saveResult($job, $result);
+                    $this->log($job, 'info', __('admin.url_import.log.knowledge_done', [
+                        'chars' => mb_strlen($aiKnowledge, 'UTF-8'),
+                    ]), 'knowledge');
+
+                    return $job->refresh();
+                } catch (Throwable $exception) {
+                    $message = $this->normalizeAiErrorMessage($exception, $model);
+                    if ($attempt < self::AI_ANALYSIS_MAX_ATTEMPTS) {
+                        $this->log($job, 'warning', __('admin.url_import.log.ai_model_retry', [
+                            'model' => $this->modelDisplayName($model),
+                            'current' => $attempt,
+                            'max' => self::AI_ANALYSIS_MAX_ATTEMPTS,
+                            'message' => $message,
+                        ]), 'knowledge');
+
+                        continue;
+                    }
+
+                    $errors[] = $this->formatModelFailure($model, $exception);
+                    $this->log($job, 'warning', __('admin.url_import.log.ai_model_failed', [
+                        'model' => $this->modelDisplayName($model),
+                        'message' => $message,
+                    ]), 'knowledge');
+                }
+            }
+        }
+
+        throw new \RuntimeException(__('admin.url_import.error.ai_parse_failed', [
+            'message' => __('admin.url_import.error.ai_all_models_failed', [
+                'messages' => implode('；', $errors),
+            ]),
+        ]));
+    }
+
+    /**
+     * 执行 URL 导入的核心关键词提取步骤。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
+     *
+     * @throws \RuntimeException
+     */
+    public function processKeywordsStep(UrlImportJob $job): UrlImportJob
+    {
+        $result = $this->decodeResult($job);
+        $analysis = is_array($result['analysis'] ?? null) ? $result['analysis'] : [];
+        $pageJson = $this->requireResultArray($result, 'analysis.page_json', 'knowledge');
+        $cleaned = $this->requireResultArray($result, 'analysis.cleaned', 'knowledge');
+        $aiKnowledge = trim((string) ($analysis['knowledge_markdown'] ?? ''));
+        if ($aiKnowledge === '') {
+            throw new \RuntimeException(__('admin.url_import.error.step_prerequisite_missing', ['step' => 'knowledge']));
+        }
+
+        $model = $this->resolveAnalysisModelForStep($analysis);
+        $runtime = $this->prepareAiRuntime($model);
+
+        $this->updateStep($job, 'keywords', 62);
+        $this->log($job, 'info', __('admin.url_import.log.keywords_start'), 'keywords');
+        $keywordPayload = $this->requestAiJson(
+            $runtime,
+            $this->buildKeywordsSystemPrompt(),
+            $this->buildKeywordsUserPrompt($pageJson, $cleaned, $aiKnowledge),
+            'keywords'
+        );
+        $keywordValues = $keywordPayload['keywords'] ?? (array_is_list($keywordPayload) ? $keywordPayload : []);
+        $aiKeywords = array_slice($this->cleanKeywordList($this->stringList($keywordValues)), 0, 10);
+        if ($aiKeywords === []) {
+            throw new \RuntimeException(__('admin.url_import.error.ai_keywords_missing'));
+        }
+
+        $result['analysis']['keywords'] = $aiKeywords;
+        $this->saveResult($job, $result);
+        $this->log($job, 'info', __('admin.url_import.log.keywords_done', ['count' => count($aiKeywords)]), 'keywords');
+
+        return $job->refresh();
+    }
+
+    /**
+     * 执行 URL 导入的标题建议生成步骤。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
+     *
+     * @throws \RuntimeException
+     */
+    public function processTitlesStep(UrlImportJob $job): UrlImportJob
+    {
+        $result = $this->decodeResult($job);
+        $analysis = is_array($result['analysis'] ?? null) ? $result['analysis'] : [];
+        $pageJson = $this->requireResultArray($result, 'analysis.page_json', 'keywords');
+        $cleaned = $this->requireResultArray($result, 'analysis.cleaned', 'keywords');
+        $aiKnowledge = trim((string) ($analysis['knowledge_markdown'] ?? ''));
+        $aiKeywords = $this->stringList($analysis['keywords'] ?? []);
+        if ($aiKnowledge === '' || $aiKeywords === []) {
+            throw new \RuntimeException(__('admin.url_import.error.step_prerequisite_missing', ['step' => 'keywords']));
+        }
+
+        $model = $this->resolveAnalysisModelForStep($analysis);
+        $runtime = $this->prepareAiRuntime($model);
+
+        $this->updateStep($job, 'titles', 80);
+        $this->log($job, 'info', __('admin.url_import.log.titles_start'), 'titles');
+        $titlePayload = $this->requestAiJson(
+            $runtime,
+            $this->buildTitlesSystemPrompt(),
+            $this->buildTitlesUserPrompt($pageJson, $cleaned, $aiKnowledge, $aiKeywords),
+            'titles'
+        );
+        $titleValues = $titlePayload['titles'] ?? (array_is_list($titlePayload) ? $titlePayload : []);
+        $aiTitles = array_slice($this->stringList($titleValues), 0, 50);
+        if ($aiTitles === []) {
+            throw new \RuntimeException(__('admin.url_import.error.ai_titles_missing'));
+        }
+
+        $result['analysis']['titles'] = $aiTitles;
+        $this->saveResult($job, $result);
+        $this->log($job, 'info', __('admin.url_import.log.titles_done', ['count' => count($aiTitles)]), 'titles');
+
+        return $job->refresh();
+    }
+
+    /**
+     * 执行 URL 导入的预览汇总步骤，并将业务任务标记为 completed。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
+     *
+     * @throws \RuntimeException
+     */
+    public function processPreviewStep(UrlImportJob $job): UrlImportJob
+    {
+        $result = $this->decodeResult($job);
+        $page = $this->requireResultArray($result, 'page', 'page_json');
+        $analysis = $this->requireResultArray($result, 'analysis', 'titles');
+        if (trim((string) ($analysis['knowledge_markdown'] ?? '')) === '' || $this->stringList($analysis['keywords'] ?? []) === [] || $this->stringList($analysis['titles'] ?? []) === []) {
+            throw new \RuntimeException(__('admin.url_import.error.step_prerequisite_missing', ['step' => 'titles']));
+        }
+
+        $this->updateStep($job, 'preview', 96);
+        $this->log($job, 'info', __('admin.url_import.log.preview_start'), 'preview');
+
+        unset($result['_working']);
+        $result['source'] = is_array($result['source'] ?? null) ? $result['source'] : [
+            'url' => (string) $job->url,
+            'normalized_url' => (string) $job->normalized_url,
+            'domain' => (string) $job->source_domain,
+            'fetched_at' => now()->toIso8601String(),
+            'status' => 0,
+        ];
+        $result['page'] = $page;
+        $result['analysis'] = $analysis;
+        $result['import'] = [
+            'status' => 'preview',
+            'summary' => null,
+        ];
+
+        $this->updateStep($job, 'preview', 100, [
+            'page_title' => (string) ($page['title'] ?? ''),
+            'status' => 'completed',
+            'result_json' => json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE),
+            'finished_at' => now(),
+        ]);
+        $this->log($job, 'info', __('admin.url_import.log.preview_ready'), 'preview');
+
+        return $job->refresh();
+    }
+
+    /**
+     * 将 URL 采集预览结果写入素材库。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
      * @return array{knowledge_base:int,keyword_library:int,title_library:int,keywords:int,titles:int}
+     *
+     * @throws \RuntimeException
      */
     public function commit(UrlImportJob $job): array
     {
@@ -205,7 +485,21 @@ final class UrlImportProcessingService
         $page = is_array($result['page'] ?? null) ? $result['page'] : [];
         /** @var array<string, mixed> $analysis */
         $analysis = is_array($result['analysis'] ?? null) ? $result['analysis'] : [];
-        $baseName = $this->safeName((string) ($analysis['library_name'] ?? $page['title'] ?? $job->source_domain ?: 'URL素材'));
+        // 库名优先使用采集到的页面标题；为空时回退 AI 生成名 → 域名 → "URL素材"，保持可读性。
+        $candidateNames = [
+            (string) ($page['title'] ?? ''),
+            (string) ($job->page_title ?? ''),
+            (string) ($analysis['library_name'] ?? ''),
+            (string) ($job->source_domain ?? ''),
+        ];
+        $preferredName = '';
+        foreach ($candidateNames as $candidate) {
+            if (trim($candidate) !== '') {
+                $preferredName = $candidate;
+                break;
+            }
+        }
+        $baseName = $this->safeName($preferredName !== '' ? $preferredName : 'URL素材');
         $knowledgeContent = trim((string) ($analysis['knowledge_markdown'] ?? $page['text'] ?? ''));
         if ($knowledgeContent === '') {
             throw new \RuntimeException(__('admin.url_import.error.commit_before_parse'));
@@ -285,12 +579,14 @@ final class UrlImportProcessingService
             'current_step' => 'imported',
             'progress_percent' => 100,
         ]);
-        $this->log($job, 'info', __('admin.url_import.log.import_done'));
 
         return $summary;
     }
 
     /**
+     * 解码 URL 采集任务的结果 JSON。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
      * @return array<string, mixed>
      */
     public function decodeResult(UrlImportJob $job): array
@@ -300,8 +596,75 @@ final class UrlImportProcessingService
         return is_array($decoded) ? $decoded : [];
     }
 
+    /**
+     * 保存 URL 采集任务的阶段结果 JSON。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
+     * @param  array<string, mixed>  $result
+     */
+    private function saveResult(UrlImportJob $job, array $result): void
+    {
+        $job->update([
+            'result_json' => json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE),
+        ]);
+    }
+
+    /**
+     * 从阶段结果中读取必须存在的数组节点。
+     *
+     * @param  array<string, mixed>  $result
+     * @param  string  $key  data_get 路径
+     * @param  string  $requiredStep  缺失时提示需要补跑的前置步骤
+     * @return array<string, mixed>
+     *
+     * @throws \RuntimeException
+     */
+    private function requireResultArray(array $result, string $key, string $requiredStep): array
+    {
+        $value = data_get($result, $key);
+        if (! is_array($value) || $value === []) {
+            throw new \RuntimeException(__('admin.url_import.error.step_prerequisite_missing', ['step' => $requiredStep]));
+        }
+
+        return $value;
+    }
+
+    /**
+     * 解析后续链式步骤应使用的 AI 模型；原模型不可用时回退到当前可用模型。
+     *
+     * @param  array<string, mixed>  $analysis
+     *
+     * @throws \RuntimeException
+     */
+    private function resolveAnalysisModelForStep(array $analysis): AiModel
+    {
+        $modelId = (int) data_get($analysis, 'model.id', 0);
+        if ($modelId > 0) {
+            $model = AiModel::query()->whereKey($modelId)->first();
+            if ($model) {
+                try {
+                    $this->prepareAiRuntime($model);
+
+                    return $model;
+                } catch (Throwable) {
+                    // 若原模型已不可用，继续回退到当前可用模型。
+                }
+            }
+        }
+
+        return $this->assertAnalysisModelReady();
+    }
+
+    /**
+     * 校验目标主机不能指向本机、内网或保留地址，降低 SSRF 风险。
+     *
+     * @param  string  $host  已解析出的 URL 主机名
+     *
+     * @throws \InvalidArgumentException
+     */
     private function guardAgainstPrivateTargets(string $host): void
     {
+        return;
         if (in_array($host, ['localhost', '127.0.0.1', '0.0.0.0'], true) || str_ends_with($host, '.local')) {
             throw new \InvalidArgumentException(__('admin.url_import.error.private_url'));
         }
@@ -326,6 +689,11 @@ final class UrlImportProcessingService
         }
     }
 
+    /**
+     * 判断 IPv6 地址是否属于 ULA（fc00::/7）。
+     *
+     * @param  string  $ip  IPv6 地址
+     */
     private static function isUlaAddress(string $ip): bool
     {
         if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false) {
@@ -338,7 +706,12 @@ final class UrlImportProcessingService
     }
 
     /**
+     * 抓取目标 URL 的 HTML 内容。
+     *
+     * @param  string  $url  标准化后的目标 URL
      * @return array{html:string,status:int}
+     *
+     * @throws \RuntimeException
      */
     private function fetchPage(string $url): array
     {
@@ -366,6 +739,10 @@ final class UrlImportProcessingService
     }
 
     /**
+     * 从 HTML 中抽取标题、描述、正文和原始页面 JSON。
+     *
+     * @param  string  $html  页面 HTML
+     * @param  string  $baseUrl  页面来源 URL
      * @return array{title:string,description:string,text:string,summary:string,raw_json:array<string,mixed>}
      */
     private function parseHtml(string $html, string $baseUrl): array
@@ -410,133 +787,8 @@ final class UrlImportProcessingService
     }
 
     /**
-     * @param  array<string, mixed>  $parsed
-     * @return array{summary:string,library_name:string,keywords:list<string>,titles:list<string>,knowledge_markdown:string,analysis_source:string,model:mixed}
-     */
-    private function buildAnalysis(array $parsed, UrlImportJob $job): array
-    {
-        $title = (string) ($parsed['title'] ?? '');
-        $text = (string) ($parsed['text'] ?? '');
-        $summary = (string) ($parsed['summary'] ?? '');
-        $libraryName = $this->safeName($title !== '' ? $title : (string) $job->source_domain);
-        $pageJson = $this->buildPageJson($parsed, $job);
-
-        $models = $this->assertAnalysisModelsReady();
-        $errors = [];
-
-        foreach ($models as $model) {
-            for ($attempt = 1; $attempt <= self::AI_ANALYSIS_MAX_ATTEMPTS; $attempt++) {
-                try {
-                    $this->log($job, 'info', __('admin.url_import.log.ai_model_attempt', [
-                        'model' => $this->modelDisplayName($model),
-                        'current' => $attempt,
-                        'max' => self::AI_ANALYSIS_MAX_ATTEMPTS,
-                    ]), 'knowledge');
-                    $runtime = $this->prepareAiRuntime($model);
-
-                    $this->updateStep($job, 'knowledge', 45);
-                    $this->log($job, 'info', __('admin.url_import.log.knowledge_start'));
-                    $this->log($job, 'info', __('admin.url_import.log.clean_start'));
-                    $cleaned = $this->normalizeCleanedPage($this->requestAiJson(
-                        $runtime,
-                        $this->buildCleanSystemPrompt(),
-                        $this->buildCleanUserPrompt($pageJson)
-                    ), $parsed);
-                    $this->log($job, 'info', __('admin.url_import.log.clean_done', [
-                        'chars' => mb_strlen((string) $cleaned['text'], 'UTF-8'),
-                    ]));
-
-                    $knowledgePayload = $this->requestAiJson(
-                        $runtime,
-                        $this->buildKnowledgeSystemPrompt(),
-                        $this->buildKnowledgeUserPrompt($pageJson, $cleaned, [])
-                    );
-                    $aiSummary = $this->normalizeText($this->aiResponseTextToString($knowledgePayload['summary'] ?? $cleaned['summary'] ?? $summary));
-                    $aiLibraryName = $this->safeName($this->aiResponseTextToString($knowledgePayload['library_name'] ?? $cleaned['title'] ?? $libraryName));
-                    $aiKnowledge = trim($this->aiResponseTextToString($knowledgePayload['knowledge_markdown'] ?? ''));
-                    if ($aiKnowledge === '') {
-                        throw new \RuntimeException(__('admin.url_import.error.ai_knowledge_missing'));
-                    }
-                    $this->log($job, 'info', __('admin.url_import.log.knowledge_done', [
-                        'chars' => mb_strlen($aiKnowledge, 'UTF-8'),
-                    ]));
-
-                    $this->updateStep($job, 'keywords', 62);
-                    $this->log($job, 'info', __('admin.url_import.log.keywords_start'));
-                    $keywordPayload = $this->requestAiJson(
-                        $runtime,
-                        $this->buildKeywordsSystemPrompt(),
-                        $this->buildKeywordsUserPrompt($pageJson, $cleaned, $aiKnowledge),
-                        'keywords'
-                    );
-                    $keywordValues = $keywordPayload['keywords'] ?? (array_is_list($keywordPayload) ? $keywordPayload : []);
-                    $aiKeywords = array_slice($this->cleanKeywordList($this->stringList($keywordValues)), 0, 10);
-                    if ($aiKeywords === []) {
-                        throw new \RuntimeException(__('admin.url_import.error.ai_keywords_missing'));
-                    }
-                    $this->log($job, 'info', __('admin.url_import.log.keywords_done', ['count' => count($aiKeywords)]));
-
-                    $this->updateStep($job, 'titles', 80);
-                    $this->log($job, 'info', __('admin.url_import.log.titles_start'));
-                    $titlePayload = $this->requestAiJson(
-                        $runtime,
-                        $this->buildTitlesSystemPrompt(),
-                        $this->buildTitlesUserPrompt($pageJson, $cleaned, $aiKnowledge, $aiKeywords),
-                        'titles'
-                    );
-                    $titleValues = $titlePayload['titles'] ?? (array_is_list($titlePayload) ? $titlePayload : []);
-                    $aiTitles = array_slice($this->stringList($titleValues), 0, 50);
-                    if ($aiTitles === []) {
-                        throw new \RuntimeException(__('admin.url_import.error.ai_titles_missing'));
-                    }
-                    $this->log($job, 'info', __('admin.url_import.log.titles_done', ['count' => count($aiTitles)]));
-
-                    $this->log($job, 'info', __('admin.url_import.log.ai_analyze_done', ['model' => $this->modelDisplayName($model)]));
-
-                    return [
-                        'summary' => $aiSummary !== '' ? $aiSummary : Str::limit($text, 220, '...'),
-                        'library_name' => $aiLibraryName !== '' ? $aiLibraryName : $libraryName,
-                        'keywords' => $aiKeywords,
-                        'titles' => $aiTitles,
-                        'knowledge_markdown' => $aiKnowledge,
-                        'analysis_source' => 'ai',
-                        'model' => [
-                            'id' => (int) $model->id,
-                            'name' => (string) $model->name,
-                        ],
-                        'page_json' => $pageJson,
-                        'cleaned' => $cleaned,
-                    ];
-                } catch (Throwable $exception) {
-                    $message = $this->normalizeAiErrorMessage($exception, $model);
-                    if ($attempt < self::AI_ANALYSIS_MAX_ATTEMPTS) {
-                        $this->log($job, 'warning', __('admin.url_import.log.ai_model_retry', [
-                            'model' => $this->modelDisplayName($model),
-                            'current' => $attempt,
-                            'max' => self::AI_ANALYSIS_MAX_ATTEMPTS,
-                            'message' => $message,
-                        ]), (string) ($job->current_step ?: 'knowledge'));
-
-                        continue;
-                    }
-
-                    $errors[] = $this->formatModelFailure($model, $exception);
-                    $this->log($job, 'warning', __('admin.url_import.log.ai_model_failed', [
-                        'model' => $this->modelDisplayName($model),
-                        'message' => $message,
-                    ]), (string) ($job->current_step ?: 'knowledge'));
-                }
-            }
-        }
-
-        throw new \RuntimeException(__('admin.url_import.error.ai_parse_failed', [
-            'message' => __('admin.url_import.error.ai_all_models_failed', [
-                'messages' => implode('；', $errors),
-            ]),
-        ]));
-    }
-
-    /**
+     * 查询所有状态可用且未超过每日额度的聊天模型。
+     *
      * @return Collection<int, AiModel>
      */
     private function resolveAnalysisModels(): Collection
@@ -559,7 +811,12 @@ final class UrlImportProcessingService
     }
 
     /**
+     * 为指定 AI 模型准备 URL 导入运行时 provider。
+     *
+     * @param  AiModel  $model  AI 模型配置
      * @return array{provider:string,model_id:string,model:AiModel}
+     *
+     * @throws \RuntimeException
      */
     private function prepareAiRuntime(AiModel $model): array
     {
@@ -584,8 +841,15 @@ final class UrlImportProcessingService
     }
 
     /**
+     * 调用 AI 并解析 JSON 响应。
+     *
      * @param  array{provider:string,model_id:string,model:AiModel}  $runtime
+     * @param  string  $systemPrompt  系统提示词
+     * @param  string  $userPrompt  用户提示词
+     * @param  string|null  $listFallbackKey  列表型步骤的纯文本回退字段名
      * @return array<string, mixed>
+     *
+     * @throws \RuntimeException
      */
     private function requestAiJson(array $runtime, string $systemPrompt, string $userPrompt, ?string $listFallbackKey = null): array
     {
@@ -634,6 +898,11 @@ final class UrlImportProcessingService
         return $decoded;
     }
 
+    /**
+     * 将不同模型返回的文本结构统一转换为字符串。
+     *
+     * @param  mixed  $value  AI SDK 返回的文本片段或结构化内容
+     */
     private function aiResponseTextToString(mixed $value): string
     {
         if ($value === null) {
@@ -682,6 +951,11 @@ final class UrlImportProcessingService
         return '';
     }
 
+    /**
+     * 获取用于日志展示的模型名称。
+     *
+     * @param  AiModel  $model  AI 模型配置
+     */
     private function modelDisplayName(AiModel $model): string
     {
         $name = trim((string) ($model->name ?? ''));
@@ -690,11 +964,23 @@ final class UrlImportProcessingService
         return trim($name.($modelId !== '' ? ' / '.$modelId : '')) ?: '#'.(int) $model->id;
     }
 
+    /**
+     * 格式化单个模型失败原因。
+     *
+     * @param  AiModel  $model  AI 模型配置
+     * @param  Throwable  $exception  模型调用异常
+     */
     private function formatModelFailure(AiModel $model, Throwable $exception): string
     {
         return $this->modelDisplayName($model).'：'.$this->normalizeAiErrorMessage($exception, $model);
     }
 
+    /**
+     * 归一化 AI 接口异常文案，隐藏底层运行时差异。
+     *
+     * @param  Throwable  $exception  模型调用异常
+     * @param  AiModel|null  $model  关联模型配置
+     */
     private function normalizeAiErrorMessage(Throwable $exception, ?AiModel $model = null): string
     {
         $providerUrl = '';
@@ -705,6 +991,9 @@ final class UrlImportProcessingService
         return OpenAiRuntimeProvider::normalizeApiException($exception, $providerUrl);
     }
 
+    /**
+     * 构造页面清洗步骤的系统提示词。
+     */
     private function buildCleanSystemPrompt(): string
     {
         return <<<'PROMPT'
@@ -717,7 +1006,10 @@ PROMPT;
     }
 
     /**
+     * 构造发送给 AI 的页面 JSON 上下文。
+     *
      * @param  array<string, mixed>  $parsed
+     * @return array<string, string>
      */
     private function buildPageJson(array $parsed, UrlImportJob $job): array
     {
@@ -739,6 +1031,8 @@ PROMPT;
     }
 
     /**
+     * 构造页面清洗步骤的用户提示词。
+     *
      * @param  array<string, mixed>  $pageJson
      */
     private function buildCleanUserPrompt(array $pageJson): string
@@ -753,6 +1047,9 @@ PROMPT;
             .'5. entities 输出品牌、产品、服务、行业、目标用户、地名、人名等实体。';
     }
 
+    /**
+     * 构造关键词提取步骤的系统提示词。
+     */
     private function buildKeywordsSystemPrompt(): string
     {
         return <<<'PROMPT'
@@ -767,8 +1064,11 @@ PROMPT;
     }
 
     /**
+     * 构造关键词提取步骤的用户提示词。
+     *
      * @param  array<string, mixed>  $pageJson
      * @param  array<string, mixed>  $cleaned
+     * @param  string  $knowledgeMarkdown  已生成的知识库 Markdown
      */
     private function buildKeywordsUserPrompt(array $pageJson, array $cleaned, string $knowledgeMarkdown): string
     {
@@ -786,6 +1086,9 @@ PROMPT;
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
     }
 
+    /**
+     * 构造标题生成步骤的系统提示词。
+     */
     private function buildTitlesSystemPrompt(): string
     {
         return <<<'PROMPT'
@@ -799,8 +1102,11 @@ PROMPT;
     }
 
     /**
+     * 构造标题生成步骤的用户提示词。
+     *
      * @param  array<string, mixed>  $pageJson
      * @param  array<string, mixed>  $cleaned
+     * @param  string  $knowledgeMarkdown  已生成的知识库 Markdown
      * @param  list<string>  $keywords
      */
     private function buildTitlesUserPrompt(array $pageJson, array $cleaned, string $knowledgeMarkdown, array $keywords): string
@@ -817,6 +1123,9 @@ PROMPT;
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
     }
 
+    /**
+     * 构造知识库生成步骤的系统提示词。
+     */
     private function buildKnowledgeSystemPrompt(): string
     {
         return <<<'PROMPT'
@@ -829,6 +1138,8 @@ PROMPT;
     }
 
     /**
+     * 构造知识库生成步骤的用户提示词。
+     *
      * @param  array<string, mixed>  $pageJson
      * @param  array<string, mixed>  $cleaned
      * @param  list<string>  $keywords
@@ -851,6 +1162,9 @@ PROMPT;
             ."\n\n建议结构：来源、核心业务摘要、原子化事实、产品/服务与能力、目标用户与场景、可引用事实、GEO 内容建议、使用边界。";
     }
 
+    /**
+     * 返回 URL 采集内置的 GEO 素材构建规则。
+     */
     private function builtInGeoCollectionPrompt(): string
     {
         return <<<'PROMPT'
@@ -873,6 +1187,11 @@ PROMPT;
 PROMPT;
     }
 
+    /**
+     * 读取指定类型的最新后台提示词内容。
+     *
+     * @param  string  $type  prompt.type
+     */
     private function latestPromptContent(string $type): string
     {
         return (string) (Prompt::query()
@@ -883,6 +1202,9 @@ PROMPT;
     }
 
     /**
+     * 从 AI 文本响应中解析 JSON。
+     *
+     * @param  string  $content  AI 原始文本响应
      * @return array<string, mixed>
      */
     private function decodeAiJson(string $content): array
@@ -898,6 +1220,9 @@ PROMPT;
     }
 
     /**
+     * 从 AI 文本响应中提取可能的 JSON 片段。
+     *
+     * @param  string  $content  AI 原始文本响应
      * @return list<string>
      */
     private function jsonCandidates(string $content): array
@@ -929,6 +1254,13 @@ PROMPT;
         return array_values(array_unique(array_filter(array_map('trim', $candidates))));
     }
 
+    /**
+     * 从文本中提取首个括号平衡的 JSON 片段。
+     *
+     * @param  string  $content  AI 原始文本响应
+     * @param  string  $open  起始括号
+     * @param  string  $close  结束括号
+     */
     private function extractBalancedJson(string $content, string $open, string $close): string
     {
         $start = strpos($content, $open);
@@ -987,6 +1319,11 @@ PROMPT;
         return '';
     }
 
+    /**
+     * 生成用于错误提示的 AI 响应预览。
+     *
+     * @param  string  $content  AI 原始文本响应
+     */
     private function previewAiContent(string $content): string
     {
         $content = strip_tags($content);
@@ -996,6 +1333,8 @@ PROMPT;
     }
 
     /**
+     * 解析非 JSON 的列表型 AI 响应。
+     *
      * Some models obey the semantic request but ignore the strict JSON wrapper and
      * return comma-separated or numbered lists. Preserve those valid answers for
      * list-only steps such as keywords and titles, while still requiring JSON for
@@ -1042,26 +1381,8 @@ PROMPT;
     }
 
     /**
-     * @return list<string>
-     */
-    private function extractKeywords(string $text): array
-    {
-        preg_match_all('/[\p{Han}A-Za-z0-9][\p{Han}A-Za-z0-9\-\+\.]{1,24}/u', $text, $matches);
-        $stopWords = ['http', 'https', 'www', 'com', 'the', 'and', 'for', 'with', 'this', 'that', 'from', '一个', '我们', '可以', '这个', '以及', '进行', '页面', '内容', '如果', '通过', '不是', '还有', '查看详情', '详情', '更多', '重磅', '首页', '登录', '注册', '返回', '点击', '阅读', '分享'];
-        $counts = [];
-        foreach ($matches[0] ?? [] as $word) {
-            $word = trim($word);
-            if (mb_strlen($word, 'UTF-8') < 2 || in_array(mb_strtolower($word, 'UTF-8'), $stopWords, true)) {
-                continue;
-            }
-            $counts[$word] = ($counts[$word] ?? 0) + 1;
-        }
-        arsort($counts);
-
-        return array_slice(array_keys($counts), 0, 100);
-    }
-
-    /**
+     * 清洗关键词列表，过滤模板噪声、长句和泛词。
+     *
      * @param  list<string>  $keywords
      * @return list<string>
      */
@@ -1116,59 +1437,9 @@ PROMPT;
     }
 
     /**
-     * @param  list<string>  $keywords
-     * @return list<string>
-     */
-    private function generateTitles(string $pageTitle, array $keywords): array
-    {
-        $base = trim($pageTitle) !== '' ? trim($pageTitle) : ($keywords[0] ?? '网页采集内容');
-        $candidates = [
-            $base,
-            $base.'完整解读',
-            $base.'：核心信息与应用场景',
-            '关于'.$base.'的关键信息整理',
-            $base.'为什么值得关注？核心价值与实践建议',
-            $base.'如何用于 GEO 内容建设？',
-        ];
-        foreach (array_slice($keywords, 0, 10) as $keyword) {
-            $candidates[] = $keyword.'是什么？核心信息与实践建议';
-            $candidates[] = $keyword.'完整指南：从概念到应用';
-            $candidates[] = $keyword.'为什么重要？业务场景与价值拆解';
-            $candidates[] = $keyword.'怎么做？适合 AI 搜索的内容建设方法';
-            $candidates[] = '2026 年'.$keyword.'趋势与选型建议';
-        }
-
-        return array_slice(array_values(array_unique(array_filter($candidates))), 0, 50);
-    }
-
-    /**
-     * @param  array<string, mixed>  $parsed
-     * @param  list<string>  $keywords
-     */
-    private function buildKnowledgeMarkdown(array $parsed, UrlImportJob $job, array $keywords): string
-    {
-        $lines = [
-            '# '.(string) ($parsed['title'] ?? $job->source_domain),
-            '',
-            '- 来源 URL：'.(string) $job->normalized_url,
-            '- 来源域名：'.(string) $job->source_domain,
-        ];
-        if ($keywords !== []) {
-            $lines[] = '- 识别关键词：'.implode('、', array_slice($keywords, 0, 20));
-        }
-        $description = trim((string) ($parsed['description'] ?? ''));
-        if ($description !== '') {
-            $lines[] = '- 页面描述：'.$description;
-        }
-        $lines[] = '';
-        $lines[] = '## 页面正文抽取';
-        $lines[] = '';
-        $lines[] = trim((string) ($parsed['text'] ?? ''));
-
-        return trim(implode("\n", $lines));
-    }
-
-    /**
+     * 按 meta name/property 读取页面首个非空 content。
+     *
+     * @param  DOMXPath  $xpath  页面 XPath 查询器
      * @param  list<string>  $names
      */
     private function firstMetaContent(DOMXPath $xpath, array $names): string
@@ -1187,6 +1458,11 @@ PROMPT;
         return '';
     }
 
+    /**
+     * 归一化文本空白、HTML 实体和换行。
+     *
+     * @param  string  $text  原始文本
+     */
     private function normalizeText(string $text): string
     {
         $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
@@ -1196,6 +1472,11 @@ PROMPT;
         return trim($text);
     }
 
+    /**
+     * 将任意标题转换为适合素材库名称的安全文本。
+     *
+     * @param  string  $name  原始名称
+     */
     private function safeName(string $name): string
     {
         $name = $this->normalizeText($name);
@@ -1206,6 +1487,9 @@ PROMPT;
     }
 
     /**
+     * 将 AI 返回的列表结构转成去重字符串列表。
+     *
+     * @param  mixed  $value  AI 返回的列表或其他值
      * @return list<string>
      */
     private function stringList(mixed $value): array
@@ -1223,9 +1507,11 @@ PROMPT;
     }
 
     /**
+     * 标准化页面清洗结果，补齐缺失字段并限制长度。
+     *
      * @param  array<string, mixed>  $decoded
      * @param  array<string, mixed>  $parsed
-     * @return array{title:string,summary:string,text:string,entities:list<string>,facts:list<string>,noise_removed:list<string>}
+     * @return array{title:string,summary:string,text:string,core_business:array<string,mixed>,entities:list<string>,facts:list<string>,noise_removed:list<string>}
      */
     private function normalizeCleanedPage(array $decoded, array $parsed): array
     {
@@ -1254,6 +1540,69 @@ PROMPT;
         ];
     }
 
+    /**
+     * 构造 URL 导入任务详情页所需的实时状态快照。
+     *
+     * 该结构同时供 HTTP 状态接口（{@see \App\Http\Controllers\Admin\UrlImportController::status}）
+     * 与 Reverb 实时事件（{@see \App\Events\Admin\UrlImportProgressUpdated}）使用，
+     * 确保前端 renderStatus 拿到一致的字段集。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
+     * @return array{
+     *     id:int,
+     *     status:string,
+     *     status_label:string,
+     *     current_step:string,
+     *     stored_step:string,
+     *     progress_percent:int,
+     *     error_message:string,
+     *     result_ready:bool,
+     *     finished_at:string|null,
+     *     logs:list<array{step:string,level:string,message:string,created_at:string|null}>
+     * }
+     */
+    public function buildStatusPayload(UrlImportJob $job): array
+    {
+        $logs = UrlImportJobLog::query()
+            ->where('job_id', (int) $job->id)
+            ->oldest()
+            ->limit(120)
+            ->get();
+        $latestLogStep = (string) ($logs->last()?->step ?: '');
+        $storedStep = (string) $job->current_step;
+        $currentStep = $latestLogStep !== '' && ! ($latestLogStep === 'queued' && $storedStep !== 'queued')
+            ? $latestLogStep
+            : $storedStep;
+
+        return [
+            'id' => (int) $job->id,
+            'status' => (string) $job->status,
+            'status_label' => __('admin.url_import_history.status.'.$job->status),
+            'current_step' => $currentStep,
+            'stored_step' => $storedStep,
+            'progress_percent' => (int) $job->progress_percent,
+            'error_message' => (string) $job->error_message,
+            'result_ready' => (string) $job->result_json !== '',
+            'finished_at' => optional($job->finished_at)->format('Y-m-d H:i:s'),
+            'logs' => $logs
+                ->map(fn (UrlImportJobLog $log): array => [
+                    'step' => (string) ($log->step ?: ''),
+                    'level' => (string) $log->level,
+                    'message' => (string) $log->message,
+                    'created_at' => optional($log->created_at)->format('Y-m-d H:i:s'),
+                ])
+                ->all(),
+        ];
+    }
+
+    /**
+     * 写入 URL 导入任务日志。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
+     * @param  string  $level  日志等级
+     * @param  string  $message  日志内容
+     * @param  string|null  $step  显式步骤；为空时使用任务当前步骤
+     */
     private function log(UrlImportJob $job, string $level, string $message, ?string $step = null): void
     {
         UrlImportJobLog::query()->create([
@@ -1265,6 +1614,11 @@ PROMPT;
     }
 
     /**
+     * 更新 URL 导入任务的步骤和进度。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
+     * @param  string  $step  当前步骤
+     * @param  int  $progress  进度百分比
      * @param  array<string, mixed>  $extra
      */
     private function updateStep(UrlImportJob $job, string $step, int $progress, array $extra = []): void

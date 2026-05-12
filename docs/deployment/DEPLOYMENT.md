@@ -142,7 +142,7 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml run --rm app php 
 - `php:8.4-cli-bookworm`
 - `php artisan serve`
 - 允许运行时 `composer install`
-- 默认 `AUTO_MIGRATE=true`
+- 默认 `AUTO_MIGRATE=false`，仅 `init` 服务显式开启迁移
 
 ### 当前生产 Docker
 

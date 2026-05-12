@@ -161,10 +161,16 @@
                 <h3 class="text-base font-semibold text-red-800">{{ __('admin.url_import.error.job_failed') }}</h3>
                 <p class="mt-2 text-sm text-red-700">{{ $job->error_message }}</p>
                 <p class="mt-3 text-sm leading-6 text-red-700">{{ __('admin.url_import.error.ai_config_help') }}</p>
-                <a href="{{ route('admin.ai-models.index') }}" target="_blank" rel="noopener noreferrer" class="mt-4 inline-flex items-center rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700">
-                    <i data-lucide="external-link" class="mr-2 h-4 w-4"></i>
-                    {{ __('admin.url_import.error.ai_config_button') }}
-                </a>
+                <div class="mt-4 flex flex-wrap gap-3">
+                    <button type="button" class="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700" data-retry-url-import>
+                        <i data-lucide="rotate-cw" class="mr-2 h-4 w-4"></i>
+                        {{ __('admin.url_import.button.retry') }}
+                    </button>
+                    <a href="{{ route('admin.ai-models.index') }}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700">
+                        <i data-lucide="external-link" class="mr-2 h-4 w-4"></i>
+                        {{ __('admin.url_import.error.ai_config_button') }}
+                    </a>
+                </div>
             </div>
         @endif
 
@@ -281,10 +287,12 @@
             const processingPanel = root.querySelector('[data-processing-panel]');
             const processingTitle = root.querySelector('[data-processing-title]');
             const processingMessage = root.querySelector('[data-processing-message]');
+            const retryButton = root.querySelector('[data-retry-url-import]');
             const jobId = root.dataset.jobId || '';
             const needsAutostart = root.dataset.autostart === '1';
             const initialStatus = root.dataset.status || '';
             const hasServerResult = root.dataset.hasResult === '1';
+            const channelName = 'url-import.' + jobId;
             const stepOrder = @json($stepKeys);
             const stepLabels = @json($steps);
             const stepAliases = {extract: 'page_json', clean: 'knowledge'};
@@ -300,7 +308,7 @@
             const aiConfigButtonText = @json(__('admin.url_import.error.ai_config_button'));
             const processingHintTemplate = @json(__('admin.url_import.section.processing_hint', ['current' => '__CURRENT__', 'next' => '__NEXT__']));
             const completedHintText = @json(__('admin.url_import.progress.result_ready'));
-            let polling = null;
+            let echoChannel = null;
             let hasFinished = ['completed', 'failed'].includes(initialStatus);
             let startInFlight = false;
             let renderedLogCount = Number(logList?.dataset.renderedLogs || 0);
@@ -450,9 +458,50 @@
             };
 
             const stopPolling = () => {
-                if (polling) {
-                    window.clearInterval(polling);
-                    polling = null;
+                if (echoChannel) {
+                    try {
+                        window.Echo?.leaveChannel(channelName);
+                    } catch (_) {
+                        // Reverb disconnect 失败时静默：连接已不可用，无需再清理。
+                    }
+                    echoChannel = null;
+                }
+            };
+
+            const subscribeRealtime = () => {
+                if (echoChannel || hasFinished || !jobId) {
+                    return;
+                }
+                if (typeof window.Echo === 'undefined') {
+                    // Reverb 未就绪时降级为一次性 fetch，保证页面能拿到当前最新快照。
+                    poll().catch(() => {});
+                    return;
+                }
+                try {
+                    echoChannel = window.Echo.channel(channelName);
+                    echoChannel.listen('.url-import.progress.updated', (payload) => {
+                        let data = payload;
+                        if (typeof data === 'string') {
+                            try {
+                                data = JSON.parse(data);
+                            } catch (_) {
+                                return;
+                            }
+                        }
+                        if (data && typeof data === 'object') {
+                            renderStatus(data);
+                        }
+                    });
+                    // 订阅完成后同步一次基线，避免握手期间错过事件。
+                    poll().catch(() => {});
+                    const connection = window.Echo.connector?.pusher?.connection;
+                    connection?.bind?.('unavailable', () => {
+                        // 网络中断时拉一次最新快照，状态终态后会自动停止订阅。
+                        poll().catch(() => {});
+                    });
+                } catch (_) {
+                    echoChannel = null;
+                    poll().catch(() => {});
                 }
             };
 
@@ -478,6 +527,9 @@
                     statusText.textContent = payload.status === 'running'
                         ? streamCurrentTemplate.replace('__CURRENT__', stepLabel(currentStep))
                         : (payload.status_label || '');
+                }
+                if (payload.status === 'failed') {
+                    retryButton?.removeAttribute('disabled');
                 }
                 root.querySelectorAll('[data-step-row]').forEach((row) => {
                     const step = row.dataset.stepRow || '';
@@ -532,13 +584,11 @@
             };
 
             if (!hasFinished) {
-                polling = window.setInterval(() => {
-                    poll().catch(() => {});
-                }, 1200);
+                subscribeRealtime();
             }
 
-            const startJob = async () => {
-                if (!needsAutostart || hasFinished) {
+            const startJob = async (force = false) => {
+                if ((!needsAutostart && !force) || (hasFinished && !force)) {
                     return;
                 }
                 if (!csrf) {
@@ -549,6 +599,10 @@
                     return;
                 }
                 startInFlight = true;
+                hasFinished = false;
+                runtimeError?.classList.add('hidden');
+                runtimeNotice?.classList.add('hidden');
+                retryButton?.setAttribute('disabled', 'disabled');
 
                 try {
                     const response = await fetch(root.dataset.runUrl, {
@@ -570,12 +624,19 @@
                         throw new Error(body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() || `HTTP ${response.status}`);
                     }
                     renderStatus(await response.json());
+                    startInFlight = false;
+                    subscribeRealtime();
                 } catch (error) {
                     startInFlight = false;
                     stopPolling();
+                    retryButton?.removeAttribute('disabled');
                     showRuntimeError(error?.message || '{{ __('admin.url_import.error.run_failed') }}');
                 }
             };
+
+            retryButton?.addEventListener('click', () => {
+                startJob(true);
+            });
 
             startJob();
         })();

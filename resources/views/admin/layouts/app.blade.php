@@ -10,6 +10,8 @@
     <title>@isset($pageTitle){{ $pageTitle }} — @endisset{{ $adminBrandName }}</title>
     <script src="{{ asset('js/tailwindcss.play-cdn.js') }}"></script>
     <script src="{{ asset('js/lucide.min.js') }}"></script>
+    {{-- 加载 Vite 编译后的 app.js，使 window.Echo / Pusher 在全后台可复用 --}}
+    @vite(['resources/js/app.js'])
     @stack('styles')
 </head>
 <body class="bg-gray-50">

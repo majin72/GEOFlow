@@ -80,8 +80,8 @@ if [ "${AUTO_INIT_ONCE:-false}" = "true" ]; then
   fi
 fi
 
-# 每次容器启动执行迁移（拉代码/换新镜像后默认需要；设为 false 可关闭）
-if [ "${AUTO_MIGRATE:-true}" = "true" ]; then
+# 每次容器启动执行迁移（默认关闭；compose init 服务会显式开启，避免多个常驻容器并发 migrate）
+if [ "${AUTO_MIGRATE:-false}" = "true" ]; then
   echo "[entrypoint] php artisan migrate --force"
   php artisan migrate --force --no-interaction
 fi

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\GeoFlow\UrlImportRealtimeBroadcastService;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -37,5 +38,18 @@ class UrlImportJob extends Model
     public function logs(): HasMany
     {
         return $this->hasMany(UrlImportJobLog::class, 'job_id');
+    }
+
+    /**
+     * 模型生命周期钩子：在状态/进度等字段更新后向 Reverb 推送实时事件。
+     *
+     * Eloquent 的 updated 事件在 save 完成后同步触发，因此前端能及时收到与
+     * 数据库一致的快照，无须前端主动轮询。
+     */
+    protected static function booted(): void
+    {
+        static::updated(function (self $job): void {
+            app(UrlImportRealtimeBroadcastService::class)->broadcastProgress($job);
+        });
     }
 }

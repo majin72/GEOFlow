@@ -319,7 +319,7 @@ php artisan geoflow:admin-unlock admin
 | 变量 | 默认 | 含义 |
 |------|------|------|
 | `COMPOSER_ON_START` | `true` | 容器启动时执行 `composer install` |
-| `AUTO_MIGRATE` | `true` | 每次启动执行 `php artisan migrate --force` |
+| `AUTO_MIGRATE` | `false` | 为 `true` 时执行 `php artisan migrate --force`；默认仅 `init` 显式开启 |
 | `AUTO_INIT_ONCE` | 仅 `init` 为 `true` | 新库时执行一次 `migrate` + `db:seed` |
 | `AUTO_GENERATE_APP_KEY` | `init` 内为 `true` | 无有效 `APP_KEY` 时自动生成 |
 | `AUTO_SEED` | `false` | 为 `true` 时**每次**启动都 `db:seed`（慎用） |

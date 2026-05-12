@@ -1,3 +1,21 @@
+# --- 前端资产构建阶段：编译 Vite 产物到 public/build，供运行时镜像复制 ---
+FROM node:22-bookworm-slim AS assets
+
+WORKDIR /app
+
+# npmmirror 中国镜像加速 npm install（保持与 composer 镜像策略一致）
+RUN npm config set registry https://registry.npmmirror.com/
+
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+# 仅拷贝 Vite 构建所需的源文件，减少缓存失效面
+COPY resources ./resources
+COPY public ./public
+COPY vite.config.js ./
+
+RUN npm run build
+
 FROM php:8.4-cli-bookworm
 
 WORKDIR /var/www/html
@@ -45,6 +63,9 @@ COPY composer.json composer.lock ./
 RUN composer install --no-interaction --prefer-dist --no-dev --no-scripts
 
 COPY . .
+
+# 将前端构建产物注入到镜像 public/build，供 Blade @vite 在容器内独立运行时使用
+COPY --from=assets /app/public/build ./public/build
 
 # 仅刷新 autoload；不调 artisan / composer 脚本（镜像为 --no-dev，构建期无 Boost 等 dev 包）
 RUN composer dump-autoload --optimize --no-interaction --no-scripts

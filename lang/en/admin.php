@@ -2262,6 +2262,7 @@ return [
             'save_draft' => 'Save Draft',
             'commit' => 'Commit to Libraries',
             'refresh_result' => 'Refresh to View Result',
+            'retry' => 'Run Again',
         ],
         'ai_required' => [
             'title' => 'URL Smart Import requires an available AI model first',
@@ -2449,6 +2450,9 @@ return [
             'csrf_missing' => 'The page security token is missing. Please refresh the page and try again',
             'commit_before_parse' => 'Finish at least one parsing run before committing the result',
             'commit_failed' => 'Import failed',
+            'queue_aborted' => 'Queue run aborted: :reason',
+            'queue_aborted_unknown' => 'Reason unknown (often worker timeout or process killed)',
+            'step_prerequisite_missing' => 'Cannot continue because the intermediate result for step :step is missing. Restart from that step.',
         ],
     ],
     'url_import_history' => [

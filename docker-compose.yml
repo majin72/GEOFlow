@@ -40,6 +40,7 @@ services:
     environment:
       AUTO_GENERATE_APP_KEY: "true"
       AUTO_INIT_ONCE: "true"
+      AUTO_MIGRATE: "true"
     volumes:
       - ./:/var/www/html
     depends_on:

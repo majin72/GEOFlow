@@ -23,6 +23,15 @@ abstract class TestCase extends BaseTestCase
         return $app;
     }
 
+    /**
+     * 测试时不要求 Vite 编译产物，避免 admin layout 中的 @vite 因 manifest 缺失抛错。
+     */
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->withoutVite();
+    }
+
     private function forceTestingDatabaseEnvironment(): void
     {
         $variables = [

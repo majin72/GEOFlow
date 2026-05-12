@@ -49,6 +49,10 @@ return [
     'title_ai_keyword_sample_limit' => max(1, min(100, (int) env('GEOFLOW_TITLE_AI_KEYWORD_SAMPLE_LIMIT', 10))),
     // URL 智能采集 SSRF 防护保持默认严格；仅在明确受控的透明代理/Docker/VPN DNS 环境中开启。
     'url_import_allow_mixed_dns' => filter_var(env('URL_IMPORT_ALLOW_MIXED_DNS', false), FILTER_VALIDATE_BOOLEAN),
+    // URL 智能采集单步骤 Job 超时秒数；Redis retry_after 应大于该值，见 App\Jobs\UrlImportStepJob。
+    'url_import_queue_timeout_seconds' => max(60, (int) env('URL_IMPORT_QUEUE_TIMEOUT', 900)),
+    // 非空时投递到该队列名（如 imports）；留空使用默认队列。
+    'url_import_queue' => trim((string) env('URL_IMPORT_QUEUE', '')),
     // 为 true 时记录知识库「查询向量」是否由默认 embedding 接口生成（便于对照 bak 验证；默认关闭）
     'debug_knowledge_query_embedding' => filter_var(env('GEOFLOW_DEBUG_KNOWLEDGE_QUERY_EMBEDDING', false), FILTER_VALIDATE_BOOLEAN),
 

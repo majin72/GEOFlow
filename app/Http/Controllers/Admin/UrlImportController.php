@@ -3,6 +3,12 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\BuildUrlImportKeywordsJob;
+use App\Jobs\BuildUrlImportKnowledgeJob;
+use App\Jobs\BuildUrlImportPageJsonJob;
+use App\Jobs\BuildUrlImportTitlesJob;
+use App\Jobs\CompleteUrlImportPreviewJob;
+use App\Jobs\FetchUrlImportPageJob;
 use App\Models\KeywordLibrary;
 use App\Models\KnowledgeBase;
 use App\Models\TitleLibrary;
@@ -12,14 +18,20 @@ use App\Services\GeoFlow\UrlImportProcessingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\View\View;
 
 class UrlImportController extends Controller
 {
+    /**
+     * @param  UrlImportProcessingService  $urlImportProcessingService  URL 智能采集业务服务
+     */
     public function __construct(private readonly UrlImportProcessingService $urlImportProcessingService) {}
 
+    /**
+     * 显示 URL 智能采集新建页面。
+     */
     public function index(): View
     {
         return view('admin.url-import.index', [
@@ -31,6 +43,11 @@ class UrlImportController extends Controller
         ]);
     }
 
+    /**
+     * 创建 URL 智能采集任务并跳转到任务详情页。
+     *
+     * @param  Request  $request  后台提交的 URL 采集表单请求
+     */
     public function store(Request $request): RedirectResponse
     {
         $validated = $request->validate([
@@ -88,6 +105,13 @@ class UrlImportController extends Controller
         return redirect()->route('admin.url-import.show', ['jobId' => $job->id]);
     }
 
+    /**
+     * 启动或重启 URL 智能采集任务。
+     *
+     * 非测试环境会根据当前步骤构造链式队列；失败任务会从失败步骤继续。
+     *
+     * @param  int  $jobId  URL 导入任务 ID
+     */
     public function run(int $jobId): JsonResponse
     {
         $job = UrlImportJob::query()->whereKey($jobId)->firstOrFail();
@@ -124,15 +148,23 @@ class UrlImportController extends Controller
                     'started_at' => $job->started_at ?: now(),
                 ]);
 
-                if (! $this->spawnUrlImportWorker((int) $job->id)) {
-                    $job = $this->urlImportProcessingService->process($job->refresh());
+                $chain = Bus::chain($this->urlImportJobChain($job));
+                $queueName = trim((string) config('geoflow.url_import_queue', ''));
+                if ($queueName !== '') {
+                    $chain->onQueue($queueName);
                 }
+                $chain->dispatch();
             }
         }
 
         return response()->json($this->statusPayload($job->refresh()));
     }
 
+    /**
+     * 返回 URL 智能采集任务当前状态和最近日志。
+     *
+     * @param  int  $jobId  URL 导入任务 ID
+     */
     public function status(int $jobId): JsonResponse
     {
         $job = UrlImportJob::query()->whereKey($jobId)->firstOrFail();
@@ -140,6 +172,11 @@ class UrlImportController extends Controller
         return response()->json($this->statusPayload($job));
     }
 
+    /**
+     * 将已完成的 URL 智能采集结果写入知识库、关键词库和标题库。
+     *
+     * @param  int  $jobId  URL 导入任务 ID
+     */
     public function commit(int $jobId): RedirectResponse
     {
         $job = UrlImportJob::query()->whereKey($jobId)->firstOrFail();
@@ -159,6 +196,11 @@ class UrlImportController extends Controller
             ]));
     }
 
+    /**
+     * 显示 URL 智能采集任务详情、进度、日志和预览结果。
+     *
+     * @param  int  $jobId  URL 导入任务 ID
+     */
     public function show(int $jobId): View
     {
         $job = UrlImportJob::query()->findOrFail($jobId);
@@ -174,6 +216,9 @@ class UrlImportController extends Controller
         ]);
     }
 
+    /**
+     * 显示 URL 智能采集历史列表。
+     */
     public function history(): View
     {
         return view('admin.url-import.history', [
@@ -189,6 +234,11 @@ class UrlImportController extends Controller
         ]);
     }
 
+    /**
+     * 读取素材库容量统计。
+     *
+     * @return array{knowledge_bases:int,keyword_libraries:int,title_libraries:int}
+     */
     private function loadStats(): array
     {
         return [
@@ -199,6 +249,7 @@ class UrlImportController extends Controller
     }
 
     /**
+     * @param  string  $value  JSON 字符串
      * @return array<string, mixed>
      */
     private function decodeJson(string $value): array
@@ -213,57 +264,63 @@ class UrlImportController extends Controller
     }
 
     /**
-     * 通过 Artisan 在当前 PHP 进程内执行 `geoflow:process-url-import`，避免 `exec` 与 `PHP_BINARY` 指向 `php-fpm` 等问题。
+     * 根据当前步骤构造可续跑的 URL 导入任务链；失败后再次启动时从失败步骤继续。
      *
-     * @return bool 子命令退出码为 0 时为 true；为 false 时 {@see run} 将回退为 {@see UrlImportProcessingService::process}
+     * @param  UrlImportJob  $job  URL 导入任务
+     * @return list<FetchUrlImportPageJob|BuildUrlImportPageJsonJob|BuildUrlImportKnowledgeJob|BuildUrlImportKeywordsJob|BuildUrlImportTitlesJob|CompleteUrlImportPreviewJob>
      */
-    private function spawnUrlImportWorker(int $jobId): bool
+    private function urlImportJobChain(UrlImportJob $job): array
     {
-        try {
-            $exitCode = Artisan::call('geoflow:process-url-import', [
-                'jobId' => (string) $jobId,
-            ]);
-        } catch (\Throwable) {
-            return false;
-        }
+        $jobId = (int) $job->id;
+        $steps = [
+            'fetch' => new FetchUrlImportPageJob($jobId),
+            'page_json' => new BuildUrlImportPageJsonJob($jobId),
+            'knowledge' => new BuildUrlImportKnowledgeJob($jobId),
+            'keywords' => new BuildUrlImportKeywordsJob($jobId),
+            'titles' => new BuildUrlImportTitlesJob($jobId),
+            'preview' => new CompleteUrlImportPreviewJob($jobId),
+        ];
 
-        return $exitCode === 0;
+        $currentStep = (string) ($job->current_step ?: 'queued');
+        $startAt = match ($currentStep) {
+            'fetch' => 'fetch',
+            'page_json' => 'page_json',
+            'knowledge' => 'knowledge',
+            'keywords' => 'keywords',
+            'titles' => 'titles',
+            'preview' => 'preview',
+            default => 'fetch',
+        };
+
+        $keys = array_keys($steps);
+        $offset = array_search($startAt, $keys, true);
+        $offset = $offset === false ? 0 : $offset;
+
+        return array_values(array_slice($steps, $offset));
     }
 
     /**
-     * @return array<string, mixed>
+     * 委托至 service 层构造前端所需的状态快照，保持原有 HTTP 接口契约不变。
+     *
+     * 同一份 payload 结构也被 {@see \App\Events\Admin\UrlImportProgressUpdated} 通过 Reverb 推送，
+     * 因此真实实现集中在 {@see UrlImportProcessingService::buildStatusPayload}。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
+     * @return array{
+     *     id:int,
+     *     status:string,
+     *     status_label:string,
+     *     current_step:string,
+     *     stored_step:string,
+     *     progress_percent:int,
+     *     error_message:string,
+     *     result_ready:bool,
+     *     finished_at:string|null,
+     *     logs:list<array{step:string,level:string,message:string,created_at:string|null}>
+     * }
      */
     private function statusPayload(UrlImportJob $job): array
     {
-        $logs = UrlImportJobLog::query()
-            ->where('job_id', (int) $job->id)
-            ->oldest()
-            ->limit(120)
-            ->get();
-        $latestLogStep = (string) ($logs->last()?->step ?: '');
-        $storedStep = (string) $job->current_step;
-        $currentStep = $latestLogStep !== '' && ! ($latestLogStep === 'queued' && $storedStep !== 'queued')
-            ? $latestLogStep
-            : $storedStep;
-
-        return [
-            'id' => (int) $job->id,
-            'status' => (string) $job->status,
-            'status_label' => __('admin.url_import_history.status.' . $job->status),
-            'current_step' => $currentStep,
-            'stored_step' => $storedStep,
-            'progress_percent' => (int) $job->progress_percent,
-            'error_message' => (string) $job->error_message,
-            'result_ready' => (string) $job->result_json !== '',
-            'finished_at' => optional($job->finished_at)->format('Y-m-d H:i:s'),
-            'logs' => $logs
-                ->map(fn (UrlImportJobLog $log): array => [
-                    'step' => (string) ($log->step ?: ''),
-                    'level' => (string) $log->level,
-                    'message' => (string) $log->message,
-                    'created_at' => optional($log->created_at)->format('Y-m-d H:i:s'),
-                ])
-                ->all(),
-        ];
+        return $this->urlImportProcessingService->buildStatusPayload($job);
     }
 }

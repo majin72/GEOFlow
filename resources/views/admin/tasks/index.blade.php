@@ -358,7 +358,6 @@
 @endsection
 
 @push('scripts')
-<script src="https://js.pusher.com/8.4.0/pusher.min.js"></script>
 @php
     $taskInitialOverview = [
         'tasks' => $tasks,
@@ -608,23 +607,18 @@ function requestTaskSnapshot() {
 }
 
 function initTaskRealtime() {
-    if (!TASK_REALTIME.enabled || !TASK_REALTIME.key || typeof window.Pusher === 'undefined') {
+    if (!TASK_REALTIME.enabled || typeof window.Echo === 'undefined') {
         return;
     }
 
-    const pusher = new window.Pusher(TASK_REALTIME.key, {
-        cluster: 'mt1',
-        wsHost: TASK_REALTIME.host,
-        wsPort: TASK_REALTIME.port || 80,
-        wssPort: TASK_REALTIME.port || 443,
-        forceTLS: TASK_REALTIME.scheme === 'https',
-        enabledTransports: ['ws', 'wss'],
-    });
-
-    const channel = pusher.subscribe('admin.tasks');
-    channel.bind('tasks.overview.updated', (payload) => {
-        applyOverview(payload);
-    });
+    try {
+        const channel = window.Echo.channel('admin.tasks');
+        channel.listen('.tasks.overview.updated', (payload) => {
+            applyOverview(payload);
+        });
+    } catch (_) {
+        // Echo 初始化失败时静默：页面有定时 requestTaskSnapshot 作为兜底。
+    }
 }
 
 function startBatchExecution(taskId, taskName) {

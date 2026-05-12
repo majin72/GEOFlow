@@ -304,7 +304,7 @@ Optional localhost-only DB/Redis host ports: see `DB_EXPOSE_PORT` and `REDIS_EXP
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `COMPOSER_ON_START` | `true` | Run `composer install` on container start |
-| `AUTO_MIGRATE` | `true` | Run `php artisan migrate --force` on each start |
+| `AUTO_MIGRATE` | `false` | Run `php artisan migrate --force` when set to `true`; explicitly enabled only for `init` by default |
 | `AUTO_INIT_ONCE` | `true` on `init` only | First-time `migrate` + `db:seed` on empty DB |
 | `AUTO_GENERATE_APP_KEY` | enabled in `init` | Generate `APP_KEY` when missing |
 | `AUTO_SEED` | `false` | If `true`, runs **`db:seed` every start** (use with care) |

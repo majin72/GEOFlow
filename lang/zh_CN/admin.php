@@ -2262,6 +2262,7 @@ return [
             'save_draft' => '保存草稿',
             'commit' => '确认入库',
             'refresh_result' => '刷新查看结果',
+            'retry' => '重新运行',
         ],
         'ai_required' => [
             'title' => 'URL 智能采集需要先配置可用 AI 模型',
@@ -2449,6 +2450,9 @@ return [
             'csrf_missing' => '页面安全令牌缺失，请刷新页面后重试',
             'commit_before_parse' => '请先完成一次采集任务，再执行入库',
             'commit_failed' => '入库失败',
+            'queue_aborted' => '队列执行中断：:reason',
+            'queue_aborted_unknown' => '原因未知（常见于队列 worker 超时或进程被中断）',
+            'step_prerequisite_missing' => '无法继续执行，缺少 :step 步骤的中间结果，请从该步骤重新运行',
         ],
     ],
     'url_import_history' => [
