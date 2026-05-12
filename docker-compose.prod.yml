@@ -88,11 +88,16 @@ services:
     volumes:
       - ./.env.prod:/var/www/html/.env
       - ./storage:/var/www/html/storage
-    # 让容器能解析 host.docker.internal → 宿主机网关 IP，
+    # 让容器能解析 host.docker.internal → 宿主机网关 IP（host-gateway=docker0 上的 172.17.0.1）。
     # 用于访问宿主机上 autossh 反向隧道穿出来的 external-fetch-bridge (127.0.0.1:19826)。
-    # Docker 20.10+ 起 Linux 也支持 host-gateway（macOS/Windows 早已支持）。
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # 同时接入 default（compose 自定义网络，与 postgres/redis 通信）
+    # 与 host_access（docker 默认 bridge 网络，172.17.0.0/16）：
+    # 这样容器访问 172.17.0.1 是同 bridge 内流量，绕过 docker DOCKER-ISOLATION 隔离规则。
+    networks:
+      - default
+      - host_access
     depends_on:
       init:
         condition: service_completed_successfully
@@ -141,6 +146,10 @@ services:
     # URL 智能采集 job 在此容器执行；走 host.docker.internal 访问宿主机上的 external-fetch-bridge。
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # 见 app 服务的说明：同时接入 default + host_access，避免跨 bridge isolation 阻挡。
+    networks:
+      - default
+      - host_access
     depends_on:
       init:
         condition: service_completed_successfully
@@ -190,3 +199,12 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+
+# Docker 默认 bridge 网络（external，docker daemon 启动时自动创建，无需任何额外配置）。
+# 仅给 app / queue 接入，用于跨 bridge 访问 docker0 上的反向隧道目标 (172.17.0.1:19826)，
+# 同时绕过 docker iptables 跨自定义 bridge 的 DOCKER-ISOLATION 阻挡。
+# 该网络默认无 DNS service discovery，但本项目仅用它做单向 IP 直连，不依赖名字解析。
+networks:
+  host_access:
+    name: bridge
+    external: true
