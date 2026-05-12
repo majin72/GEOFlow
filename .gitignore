@@ -18,6 +18,7 @@
 /.zed
 /auth.json
 /node_modules
+/external-fetch-bridge/node_modules
 /public/build
 /public/hot
 /public/storage

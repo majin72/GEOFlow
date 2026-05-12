@@ -6,11 +6,14 @@ use App\Models\Admin;
 use App\Services\Admin\AdminUpdateMetadataService;
 use App\Services\Admin\AdminWelcomeModalService;
 use App\Services\GeoFlow\ArticleGeoFlowService;
+use App\Services\GeoFlow\ExternalFetch\ExternalFetchConfig;
+use App\Services\GeoFlow\ExternalFetch\ExternalFetchService;
 use App\Services\GeoFlow\HorizonMetricsAdapter;
 use App\Services\GeoFlow\JobQueueService;
 use App\Services\GeoFlow\TaskLifecycleService;
 use App\Services\GeoFlow\TaskMonitoringQueryService;
 use App\View\Composers\SiteLayoutComposer;
+use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 
@@ -26,6 +29,12 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(TaskMonitoringQueryService::class);
         $this->app->singleton(TaskLifecycleService::class);
         $this->app->singleton(ArticleGeoFlowService::class);
+        $this->app->bind(ExternalFetchService::class, function ($app): ExternalFetchService {
+            return new ExternalFetchService(
+                ExternalFetchConfig::fromSettings(),
+                $app->make(HttpFactory::class),
+            );
+        });
     }
 
     /**

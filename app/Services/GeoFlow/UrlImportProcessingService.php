@@ -3,6 +3,9 @@
 namespace App\Services\GeoFlow;
 
 use App\Ai\Agents\MarkdownContentWriterAgent;
+use App\Events\Admin\UrlImportProgressUpdated;
+use App\Exceptions\GeoFlow\ExternalFetchException;
+use App\Http\Controllers\Admin\UrlImportController;
 use App\Models\AiModel;
 use App\Models\Keyword;
 use App\Models\KeywordLibrary;
@@ -12,10 +15,13 @@ use App\Models\Title;
 use App\Models\TitleLibrary;
 use App\Models\UrlImportJob;
 use App\Models\UrlImportJobLog;
+use App\Services\GeoFlow\ExternalFetch\ExternalFetchResult;
+use App\Services\GeoFlow\ExternalFetch\ExternalFetchService;
 use App\Support\GeoFlow\ApiKeyCrypto;
 use App\Support\GeoFlow\OpenAiRuntimeProvider;
 use DOMDocument;
 use DOMXPath;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -29,7 +35,10 @@ final class UrlImportProcessingService
     /**
      * @param  ApiKeyCrypto  $apiKeyCrypto  AI 模型密钥解密服务
      */
-    public function __construct(private readonly ApiKeyCrypto $apiKeyCrypto) {}
+    public function __construct(
+        private readonly ApiKeyCrypto $apiKeyCrypto,
+        private ?ExternalFetchService $externalFetchService = null,
+    ) {}
 
     /**
      * 标准化用户输入 URL，并阻止本机、内网和私有地址目标。
@@ -185,8 +194,32 @@ final class UrlImportProcessingService
         ]);
         $this->log($job, 'info', __('admin.url_import.log.fetch_start', ['url' => $job->normalized_url]), 'fetch');
 
-        $fetched = $this->fetchPage((string) $job->normalized_url);
-        $this->log($job, 'info', __('admin.url_import.log.fetch_done', ['length' => strlen($fetched['html'])]), 'fetch');
+        $url = (string) $job->normalized_url;
+        $externalFetch = $this->externalFetchService();
+        $fetched = null;
+        $externalResult = null;
+        $fetchSource = 'direct';
+
+        if ($externalFetch->shouldUseExternal($url)) {
+            $externalResult = $this->fetchExternalPage($job, $url, 'external_primary');
+            $fetchSource = 'external_primary';
+        } else {
+            try {
+                $fetched = $this->fetchPage($url);
+            } catch (Throwable $exception) {
+                if (! $this->shouldFallbackToExternal($exception, $externalFetch)) {
+                    throw $exception;
+                }
+
+                $externalResult = $this->fetchExternalPage($job, $url, 'external_fallback');
+                $fetchSource = 'external_fallback';
+            }
+        }
+
+        $contentLength = $externalResult instanceof ExternalFetchResult
+            ? strlen($externalResult->markdown)
+            : strlen((string) ($fetched['html'] ?? ''));
+        $this->log($job, 'info', __('admin.url_import.log.fetch_done', ['length' => $contentLength]), 'fetch');
 
         $result = $this->decodeResult($job);
         $result['source'] = [
@@ -194,10 +227,21 @@ final class UrlImportProcessingService
             'normalized_url' => (string) $job->normalized_url,
             'domain' => (string) $job->source_domain,
             'fetched_at' => now()->toIso8601String(),
-            'status' => $fetched['status'],
+            'status' => $externalResult instanceof ExternalFetchResult ? 200 : (int) ($fetched['status'] ?? 0),
+            'fetch_source' => $fetchSource,
         ];
-        $result['_working']['html'] = $fetched['html'];
+        if ($externalResult instanceof ExternalFetchResult) {
+            $result['_working']['markdown'] = $externalResult->markdown;
+            unset($result['_working']['html']);
+        } else {
+            $result['_working']['html'] = (string) ($fetched['html'] ?? '');
+            unset($result['_working']['markdown']);
+        }
         $this->saveResult($job, $result);
+        $job->update([
+            'fetched_markdown' => $externalResult instanceof ExternalFetchResult ? $externalResult->markdown : null,
+            'fetch_source' => $fetchSource,
+        ]);
 
         return $job->refresh();
     }
@@ -213,14 +257,17 @@ final class UrlImportProcessingService
     {
         $result = $this->decodeResult($job);
         $html = (string) data_get($result, '_working.html', '');
-        if ($html === '') {
+        $markdown = (string) ($job->fetched_markdown ?: data_get($result, '_working.markdown', ''));
+        if ($html === '' && $markdown === '') {
             throw new \RuntimeException(__('admin.url_import.error.step_prerequisite_missing', ['step' => 'fetch']));
         }
 
         $this->updateStep($job, 'page_json', 25);
         $this->log($job, 'info', __('admin.url_import.log.page_json_start'), 'page_json');
 
-        $parsed = $this->parseHtml($html, (string) $job->normalized_url);
+        $parsed = $markdown !== ''
+            ? $this->parseMarkdown($markdown, (string) $job->normalized_url)
+            : $this->parseHtml($html, (string) $job->normalized_url);
         $this->log($job, 'info', __('admin.url_import.log.extract_done', [
             'chars' => mb_strlen((string) ($parsed['text'] ?? ''), 'UTF-8'),
         ]), 'page_json');
@@ -702,7 +749,7 @@ final class UrlImportProcessingService
 
         $bin = @inet_pton($ip);
 
-        return $bin !== false && (ord($bin[0]) & 0xfe) === 0xfc;
+        return $bin !== false && (ord($bin[0]) & 0xFE) === 0xFC;
     }
 
     /**
@@ -724,7 +771,10 @@ final class UrlImportProcessingService
             ->get($url);
 
         if (! $response->successful()) {
-            throw new \RuntimeException(__('admin.url_import.error.fetch_failed', ['status' => $response->status()]));
+            throw new \RuntimeException(
+                __('admin.url_import.error.fetch_failed', ['status' => $response->status()]),
+                $response->status()
+            );
         }
 
         $html = (string) $response->body();
@@ -736,6 +786,111 @@ final class UrlImportProcessingService
             'html' => $html,
             'status' => $response->status(),
         ];
+    }
+
+    /**
+     * 延迟解析外部抓取服务，避免只测试 URL 标准化等纯函数时访问 site_settings 表。
+     */
+    private function externalFetchService(): ExternalFetchService
+    {
+        return $this->externalFetchService ??= app(ExternalFetchService::class);
+    }
+
+    /**
+     * 调用外部浏览器抓取并把异常转为 URL 导入流程可读的运行时异常。
+     *
+     * @param  UrlImportJob  $job  URL 导入任务
+     * @param  string  $url  标准化后的目标 URL
+     * @param  string  $source  external_primary 或 external_fallback
+     *
+     * @throws \RuntimeException
+     */
+    private function fetchExternalPage(UrlImportJob $job, string $url, string $source): ExternalFetchResult
+    {
+        try {
+            $this->log($job, 'info', "使用外部浏览器抓取页面（{$source}）", 'fetch');
+
+            return $this->externalFetchService()->fetch($url);
+        } catch (ExternalFetchException $exception) {
+            throw new \RuntimeException("外部浏览器抓取失败：{$exception->getMessage()}", 0, $exception);
+        }
+    }
+
+    /**
+     * 判断普通 HTTP 抓取失败后是否应回退到外部浏览器。
+     *
+     * @param  Throwable  $exception  普通抓取抛出的异常
+     * @param  ExternalFetchService  $externalFetch  外部抓取服务
+     */
+    private function shouldFallbackToExternal(Throwable $exception, ExternalFetchService $externalFetch): bool
+    {
+        if ($exception instanceof ConnectionException) {
+            return $externalFetch->isEnabled();
+        }
+
+        $status = (int) $exception->getCode();
+
+        return $status > 0 && $externalFetch->isFallbackStatus($status);
+    }
+
+    /**
+     * 从 Markdown 中抽取标题、描述、正文和原始页面 JSON。
+     *
+     * opencli 输出已经是正文优先的 Markdown；这里保持解析策略简单稳定：
+     * 1. 优先取第一个一级标题作为页面标题；
+     * 2. 去掉 Markdown 标记后作为正文文本；
+     * 3. summary 取正文前 220 字。
+     *
+     * @param  string  $markdown  外部浏览器抓回的 Markdown
+     * @param  string  $baseUrl  页面来源 URL
+     * @return array{title:string,description:string,text:string,summary:string,raw_json:array<string,mixed>}
+     */
+    private function parseMarkdown(string $markdown, string $baseUrl): array
+    {
+        $title = '';
+        foreach (preg_split('/\R/u', $markdown) ?: [] as $line) {
+            $line = trim((string) $line);
+            if (preg_match('/^#\s+(.+)$/u', $line, $matches) === 1) {
+                $title = trim((string) $matches[1]);
+                break;
+            }
+        }
+
+        if ($title === '') {
+            $title = (string) (parse_url($baseUrl, PHP_URL_HOST) ?: 'URL素材');
+        }
+
+        $text = $this->markdownToPlainText($markdown);
+        $summary = Str::limit($text, 220, '...');
+
+        return [
+            'title' => $this->normalizeText($title),
+            'description' => '',
+            'text' => Str::limit($text, 20000, ''),
+            'summary' => $this->normalizeText($summary),
+            'raw_json' => [
+                'title' => $this->normalizeText($title),
+                'description' => '',
+                'text' => Str::limit($text, 20000, ''),
+            ],
+        ];
+    }
+
+    /**
+     * 将 Markdown 粗略转换为纯文本，供现有 AI 清洗步骤复用。
+     *
+     * 这里不追求完整 Markdown AST；opencli 输出主要由标题、段落、链接和引用组成，
+     * 简单剥离常见标记即可保留主体语义。
+     */
+    private function markdownToPlainText(string $markdown): string
+    {
+        $text = preg_replace('/!\[([^\]]*)\]\([^)]+\)/u', '$1', $markdown) ?? $markdown;
+        $text = preg_replace('/\[([^\]]+)\]\([^)]+\)/u', '$1', $text) ?? $text;
+        $text = preg_replace('/^#{1,6}\s*/mu', '', $text) ?? $text;
+        $text = preg_replace('/^[>\-*+]\s*/mu', '', $text) ?? $text;
+        $text = preg_replace('/[`*_~]+/u', '', $text) ?? $text;
+
+        return $this->normalizeText($text);
     }
 
     /**
@@ -1543,8 +1698,8 @@ PROMPT;
     /**
      * 构造 URL 导入任务详情页所需的实时状态快照。
      *
-     * 该结构同时供 HTTP 状态接口（{@see \App\Http\Controllers\Admin\UrlImportController::status}）
-     * 与 Reverb 实时事件（{@see \App\Events\Admin\UrlImportProgressUpdated}）使用，
+     * 该结构同时供 HTTP 状态接口（{@see UrlImportController::status}）
+     * 与 Reverb 实时事件（{@see UrlImportProgressUpdated}）使用，
      * 确保前端 renderStatus 拿到一致的字段集。
      *
      * @param  UrlImportJob  $job  URL 导入任务

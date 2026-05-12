@@ -20,6 +20,8 @@ class UrlImportJob extends Model
         'progress_percent',
         'options_json',
         'result_json',
+        'fetched_markdown',
+        'fetch_source',
         'error_message',
         'created_by',
         'started_at',

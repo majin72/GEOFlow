@@ -16,6 +16,7 @@ use App\Http\Controllers\Admin\ArticleController;
 use App\Http\Controllers\Admin\AuthorController;
 use App\Http\Controllers\Admin\CategoryController;
 use App\Http\Controllers\Admin\DashboardController;
+use App\Http\Controllers\Admin\ExternalFetchSettingsController;
 use App\Http\Controllers\Admin\ImageLibraryController;
 use App\Http\Controllers\Admin\KeywordLibraryController;
 use App\Http\Controllers\Admin\KnowledgeBaseController;
@@ -220,6 +221,8 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
             Route::post('/', [SiteSettingsController::class, 'update'])->name('update');
             Route::post('theme', [SiteSettingsController::class, 'updateTheme'])->name('theme');
             Route::post('article-detail-ads', [SiteSettingsController::class, 'updateArticleDetailAds'])->name('ads');
+            Route::get('external-fetch', [ExternalFetchSettingsController::class, 'index'])->name('external-fetch');
+            Route::post('external-fetch', [ExternalFetchSettingsController::class, 'update'])->name('external-fetch.update');
             Route::get('sensitive-words', [SecuritySettingsController::class, 'index'])->name('sensitive-words');
             Route::post('sensitive-words', [SecuritySettingsController::class, 'storeSensitiveWords'])->name('sensitive-words.store');
             Route::post('sensitive-words/{wordId}/delete', [SecuritySettingsController::class, 'destroySensitiveWord'])

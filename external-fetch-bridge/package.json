@@ -1,0 +1,20 @@
+{
+  "name": "geoflow-external-fetch-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "本地浏览器抓取 HTTP 包装器：服务器通过 SSH 反向隧道转发到此进程，由 opencli + Chrome 真实登录态完成抓取。详见 docs/external-fetch-plan.md。",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "glob": "^11.0.0"
+  }
+}

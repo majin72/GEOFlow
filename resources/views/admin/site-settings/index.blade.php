@@ -19,6 +19,17 @@
                     </span>
                 </div>
             </a>
+            <a href="{{ route('admin.site-settings.external-fetch') }}" class="group rounded-lg border border-gray-200 bg-white p-5 shadow hover:border-blue-200 hover:bg-blue-50/40">
+                <div class="flex items-start gap-3">
+                    <span class="inline-flex rounded-lg bg-emerald-50 p-2 text-emerald-600 group-hover:bg-emerald-100">
+                        <i data-lucide="globe" class="h-5 w-5"></i>
+                    </span>
+                    <span class="min-w-0">
+                        <span class="block text-base font-semibold text-gray-900">{{ __('admin.site_settings.module_external_fetch') }}</span>
+                        <span class="mt-1 block text-sm leading-6 text-gray-600">{{ __('admin.site_settings.module_external_fetch_desc') }}</span>
+                    </span>
+                </div>
+            </a>
         </div>
 
         <details class="mb-6 bg-white shadow rounded-lg overflow-hidden group">
