@@ -64,6 +64,10 @@ services:
       - "${APP_PORT:-18080}:8080"
     volumes:
       - ./:/var/www/html
+    # 让容器能解析 host.docker.internal → 宿主机网关 IP，
+    # 用于访问宿主机上 external-fetch-bridge (127.0.0.1:19826)，或服务器侧 autossh 穿出来的隧道。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       init:
         condition: service_completed_successfully
@@ -81,6 +85,9 @@ services:
     command: ["php", "artisan", "queue:work", "redis", "--queue=geoflow,default", "--sleep=1", "--tries=1", "--timeout=300"]
     volumes:
       - ./:/var/www/html
+    # URL 智能采集 job 在此容器执行；走 host.docker.internal 访问宿主机上的 external-fetch-bridge。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       init:
         condition: service_completed_successfully

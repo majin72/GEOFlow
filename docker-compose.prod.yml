@@ -88,6 +88,11 @@ services:
     volumes:
       - ./.env.prod:/var/www/html/.env
       - ./storage:/var/www/html/storage
+    # 让容器能解析 host.docker.internal → 宿主机网关 IP，
+    # 用于访问宿主机上 autossh 反向隧道穿出来的 external-fetch-bridge (127.0.0.1:19826)。
+    # Docker 20.10+ 起 Linux 也支持 host-gateway（macOS/Windows 早已支持）。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       init:
         condition: service_completed_successfully
@@ -133,6 +138,9 @@ services:
     volumes:
       - ./.env.prod:/var/www/html/.env
       - ./storage:/var/www/html/storage
+    # URL 智能采集 job 在此容器执行；走 host.docker.internal 访问宿主机上的 external-fetch-bridge。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       init:
         condition: service_completed_successfully

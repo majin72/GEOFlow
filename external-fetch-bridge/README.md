@@ -152,6 +152,140 @@ HTTP 状态：
 
 ---
 
+## SSH 反向隧道 (autossh)
+
+把"在你 macOS 上跑的 Bridge"暴露给"远程 Linux 服务器上的队列 worker"，又不开公网端口。Bridge 启动后只监听 `127.0.0.1:19826`，由本机发起一条**反向**隧道到服务器，让服务器侧的 `127.0.0.1:19826` 实际指向你本机的 Bridge。
+
+```
+┌──────────── 服务器 (Linux) ────────────┐         ┌──────────── 本机 (macOS) ────────────┐
+│  queue worker                          │         │  autossh ─ ssh -N -R ...             │
+│    └ Http::post(127.0.0.1:19826) ──────┼─tunnel──┼─→ bridge (127.0.0.1:19826)           │
+│                                        │         │       └ opencli + Chrome             │
+└────────────────────────────────────────┘         └──────────────────────────────────────┘
+```
+
+### 1. 本机安装 autossh
+
+```bash
+brew install autossh
+```
+
+### 2. 先用原生 ssh 验证一次通
+
+替换 `ecs-user@your-server.com` 为你实际的 SSH 用户和主机：
+
+```bash
+# 本机执行：建立反向隧道；保持窗口不关
+ssh -N -R 19826:127.0.0.1:19826 ecs-user@your-server.com
+
+# 服务器执行（另开终端）：应能拿到本机 bridge 的 /health 响应
+ssh ecs-user@your-server.com 'curl -s http://127.0.0.1:19826/health'
+```
+
+预期返回 `{"ok":true,"hostname":"...MacBook-Pro.local",...}`，证明隧道走通了。然后 `Ctrl+C` 关掉这次手动 ssh。
+
+### 3. 用 autossh 做保活
+
+```bash
+autossh -M 0 -N \
+  -o "ServerAliveInterval=30" \
+  -o "ServerAliveCountMax=3" \
+  -o "ExitOnForwardFailure=yes" \
+  -R 19826:127.0.0.1:19826 \
+  ecs-user@your-server.com
+```
+
+参数详解：
+
+| 参数 | 作用 |
+|---|---|
+| `-M 0` | 关闭 autossh 自带的端口探测，改用 SSH 原生心跳，更轻量 |
+| `-N` | 只建隧道，不开远程 shell |
+| `ServerAliveInterval=30` | 每 30s 发一次心跳包，及时探测断线 |
+| `ServerAliveCountMax=3` | 连续 3 次心跳无响应即视为断连，autossh 立刻重连 |
+| `ExitOnForwardFailure=yes` | 端口转发失败立刻退出（防止"连上了但隧道没建起来"的哑壳进程） |
+| `-R 19826:127.0.0.1:19826` | 把服务器 `127.0.0.1:19826` 反向映射到本机 `127.0.0.1:19826` |
+
+### 4. 开机自启（macOS launchd）
+
+`~/Library/LaunchAgents/com.geoflow.external-fetch-bridge.tunnel.plist`：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.geoflow.external-fetch-bridge.tunnel</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/autossh</string>
+        <string>-M</string><string>0</string>
+        <string>-N</string>
+        <string>-o</string><string>ServerAliveInterval=30</string>
+        <string>-o</string><string>ServerAliveCountMax=3</string>
+        <string>-o</string><string>ExitOnForwardFailure=yes</string>
+        <string>-o</string><string>StrictHostKeyChecking=accept-new</string>
+        <string>-R</string><string>19826:127.0.0.1:19826</string>
+        <string>ecs-user@your-server.com</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AUTOSSH_GATETIME</key><string>0</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USER/Library/Logs/external-fetch-tunnel.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USER/Library/Logs/external-fetch-tunnel.err</string>
+</dict>
+</plist>
+```
+
+> Intel Mac 把 `/opt/homebrew/bin/autossh` 改成 `/usr/local/bin/autossh`；`YOUR_USER` 改成你的用户名。`AUTOSSH_GATETIME=0` 让 autossh 一启动就进入"持续重连"模式，不要求首次连接成功后才开始保活。
+
+加载 / 卸载 / 查看：
+
+```bash
+launchctl load -w ~/Library/LaunchAgents/com.geoflow.external-fetch-bridge.tunnel.plist
+launchctl list | grep external-fetch-bridge
+launchctl unload ~/Library/LaunchAgents/com.geoflow.external-fetch-bridge.tunnel.plist
+```
+
+### 5. 服务器侧 GEOFlow 配置
+
+后台 → 网站设置 → 外部浏览器抓取，把 endpoint 填成隧道目的地：
+
+```
+http://127.0.0.1:19826
+```
+
+Token 与本机 `.env` 中 `BRIDGE_TOKEN` 一致即可。
+
+### 6. 排障
+
+| 现象 | 排查 |
+|---|---|
+| autossh 启动即退出 | 用 `ssh -vN -R ...` 手动跑一次看具体报错；多半是 key 不通 / `ExitOnForwardFailure=yes` 检测到端口被占 |
+| 服务器 `curl 127.0.0.1:19826/health` connection refused | 隧道掉了；`ps aux \| grep autossh` 看本机进程是否在；查 launchd 日志 `tail -f ~/Library/Logs/external-fetch-tunnel.err` |
+| 服务器 19826 端口已被其他服务占用 | 换一个对端端口：`-R 29826:127.0.0.1:19826`，对应改 GEOFlow endpoint 为 `http://127.0.0.1:29826` |
+| 多台服务器共用 | 给每台机器跑一条 autossh，对端端口可以都用 19826（彼此互相隔离） |
+
+### 7. 安全要点
+
+- 服务器 `sshd_config` 默认 `GatewayPorts no`，隧道端口只绑定到服务器 `127.0.0.1`，**外部公网不可达**，这是必须保留的默认值。
+- 强烈建议给 autossh 准备一把**专用 SSH key**（不要复用日常登录 key），在服务器 `~/.ssh/authorized_keys` 该 key 行前加：
+
+  ```
+  command="echo only-tunnel",no-pty,no-agent-forwarding,no-X11-forwarding,permitlisten="127.0.0.1:19826" ssh-ed25519 AAA... bridge-tunnel
+  ```
+
+  这把 key 即使泄露也只能开 19826 反向隧道，登不了 shell。
+- autossh 本身**没有加密**——加密是 SSH 提供的。换言之这条隧道全程 AES。
+
+---
+
 ## 安全说明
 
 - Bridge 监听 `127.0.0.1:19826`，**不开公网**。生产期通过 SSH 反向隧道穿透到服务器 `127.0.0.1`，外部不可达。
