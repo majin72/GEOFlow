@@ -1,6 +1,14 @@
 # postgres 凭据由 DB_* 插值映射为官方镜像的 POSTGRES_*；redis 使用 REDIS_PASSWORD。推荐 docker compose --env-file .env.prod …
 name: geoflow-laravel-prod
 
+# Vite 构建期注入的前端公开变量；任一 build 块使用 `args: *vite_build_args` 即可复用。
+# 这些值会被 Vite 直接打入 JS 产物，因此即使更换 .env.prod 也需要重新 build 镜像才能生效。
+x-vite-build-args: &vite_build_args
+  VITE_REVERB_APP_KEY: "${REVERB_APP_KEY:-}"
+  VITE_REVERB_HOST: "${REVERB_HOST:-}"
+  VITE_REVERB_PORT: "${REVERB_PORT:-}"
+  VITE_REVERB_SCHEME: "${REVERB_SCHEME:-}"
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -47,6 +55,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.prod
+      args: *vite_build_args
     container_name: geoflow-init-prod
     working_dir: /var/www/html
     env_file:
@@ -71,6 +80,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.prod
+      args: *vite_build_args
     container_name: geoflow-app-prod
     working_dir: /var/www/html
     env_file:
@@ -93,6 +103,7 @@ services:
     build:
       context: .
       dockerfile: docker/nginx/Dockerfile.prod
+      args: *vite_build_args
     container_name: geoflow-web-prod
     ports:
       - "${WEB_PORT:-18080}:80"
@@ -113,6 +124,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.prod
+      args: *vite_build_args
     container_name: geoflow-queue-prod
     working_dir: /var/www/html
     env_file:
@@ -133,6 +145,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.prod
+      args: *vite_build_args
     container_name: geoflow-scheduler-prod
     working_dir: /var/www/html
     env_file:
@@ -151,6 +164,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.prod
+      args: *vite_build_args
     container_name: geoflow-reverb-prod
     working_dir: /var/www/html
     env_file:
