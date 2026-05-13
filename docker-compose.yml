@@ -1,5 +1,13 @@
 name: geoflow-laravel
 
+# Vite 构建期注入的前端公开变量；任一 build 块使用 `args: *vite_build_args` 即可复用。
+x-vite-build-args: &vite_build_args
+  VITE_REVERB_APP_KEY: "${REVERB_APP_KEY:-}"
+  VITE_REVERB_HOST: "${REVERB_HOST:-}"
+  VITE_REVERB_PORT: "${REVERB_PORT:-}"
+  VITE_REVERB_SCHEME: "${REVERB_SCHEME:-}"
+  VITE_REVERB_PATH: "${REVERB_SERVER_PATH:-}"
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -31,6 +39,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args: *vite_build_args
     container_name: geoflow-init
     working_dir: /var/www/html
     env_file:
@@ -55,6 +64,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args: *vite_build_args
     container_name: geoflow-app
     working_dir: /var/www/html
     env_file:
@@ -78,6 +88,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args: *vite_build_args
     container_name: geoflow-queue
     working_dir: /var/www/html
     env_file:
@@ -98,6 +109,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args: *vite_build_args
     container_name: geoflow-scheduler
     working_dir: /var/www/html
     env_file:
@@ -115,6 +127,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args: *vite_build_args
     container_name: geoflow-reverb
     working_dir: /var/www/html
     env_file:

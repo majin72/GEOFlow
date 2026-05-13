@@ -8,6 +8,7 @@ x-vite-build-args: &vite_build_args
   VITE_REVERB_HOST: "${REVERB_HOST:-}"
   VITE_REVERB_PORT: "${REVERB_PORT:-}"
   VITE_REVERB_SCHEME: "${REVERB_SCHEME:-}"
+  VITE_REVERB_PATH: "${REVERB_SERVER_PATH:-}"
 
 services:
   postgres:

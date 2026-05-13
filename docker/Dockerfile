@@ -3,6 +3,18 @@ FROM node:22-bookworm-slim AS assets
 
 WORKDIR /app
 
+# Vite 在打包时把 VITE_* 直接内联进 JS 产物；Docker 构建需显式传入 Reverb 公开配置。
+ARG VITE_REVERB_APP_KEY=""
+ARG VITE_REVERB_HOST=""
+ARG VITE_REVERB_PORT=""
+ARG VITE_REVERB_SCHEME=""
+ARG VITE_REVERB_PATH=""
+ENV VITE_REVERB_APP_KEY=$VITE_REVERB_APP_KEY \
+    VITE_REVERB_HOST=$VITE_REVERB_HOST \
+    VITE_REVERB_PORT=$VITE_REVERB_PORT \
+    VITE_REVERB_SCHEME=$VITE_REVERB_SCHEME \
+    VITE_REVERB_PATH=$VITE_REVERB_PATH
+
 # npmmirror 中国镜像加速 npm install（保持与 composer 镜像策略一致）
 RUN npm config set registry https://registry.npmmirror.com/
 
