@@ -106,6 +106,47 @@
                                placeholder="© 2024 Site Name. All rights reserved.">
                     </div>
 
+                    {{-- 备案信息：ICP 与公安备案号，纯文本填写；公安备 record code 选填，前端会自动拼出 mps 查询链接。 --}}
+                    <div class="rounded-lg border border-emerald-100 bg-emerald-50/60 p-4">
+                        <div class="mb-3 flex items-center gap-2">
+                            <span class="inline-flex rounded-md bg-emerald-100 p-1.5 text-emerald-700">
+                                <i data-lucide="badge-check" class="w-4 h-4"></i>
+                            </span>
+                            <div>
+                                <h4 class="text-sm font-semibold text-gray-900">{{ __('admin.site_settings.section_beian') }}</h4>
+                                <p class="text-xs text-gray-600">{{ __('admin.site_settings.beian_desc') }}</p>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">{{ __('admin.site_settings.field_icp_beian') }}</label>
+                                <input type="text" name="site_icp_beian"
+                                       value="{{ $settings['site_icp_beian'] }}"
+                                       class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500"
+                                       placeholder="{{ __('admin.site_settings.placeholder_icp_beian') }}">
+                                <p class="mt-1 text-xs text-gray-500">{{ __('admin.site_settings.icp_beian_help') }}</p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">{{ __('admin.site_settings.field_police_beian') }}</label>
+                                <input type="text" name="site_police_beian"
+                                       value="{{ $settings['site_police_beian'] }}"
+                                       class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500"
+                                       placeholder="{{ __('admin.site_settings.placeholder_police_beian') }}">
+                                <p class="mt-1 text-xs text-gray-500">{{ __('admin.site_settings.police_beian_help') }}</p>
+                            </div>
+                        </div>
+
+                        <div class="mt-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-2">{{ __('admin.site_settings.field_police_beian_code') }}</label>
+                            <input type="text" name="site_police_beian_code" inputmode="numeric"
+                                   value="{{ $settings['site_police_beian_code'] }}"
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-emerald-500 focus:border-emerald-500"
+                                   placeholder="{{ __('admin.site_settings.placeholder_police_beian_code') }}">
+                            <p class="mt-1 text-xs text-gray-500">{{ __('admin.site_settings.police_beian_code_help') }}</p>
+                        </div>
+                    </div>
+
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-2">{{ __('admin.site_settings.field_featured_limit') }}</label>

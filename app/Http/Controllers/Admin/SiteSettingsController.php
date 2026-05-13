@@ -51,6 +51,10 @@ class SiteSettingsController extends Controller
             'site_description' => ['nullable', 'string'],
             'site_keywords' => ['nullable', 'string', 'max:500'],
             'copyright_info' => ['nullable', 'string', 'max:500'],
+            // 备案信息：ICP 默认链接到工信部，公安备 record code 若填写则前台自动拼装 mps 查询链接。
+            'site_icp_beian' => ['nullable', 'string', 'max:120'],
+            'site_police_beian' => ['nullable', 'string', 'max:120'],
+            'site_police_beian_code' => ['nullable', 'string', 'max:32', 'regex:/^[0-9]*$/'],
             'site_logo' => ['nullable', 'url', 'max:500'],
             'site_favicon' => ['nullable', 'url', 'max:500'],
             'analytics_code' => ['nullable', 'string'],
@@ -78,6 +82,7 @@ class SiteSettingsController extends Controller
             'admin_base_path.max' => __('admin.site_settings.error.admin_base_path_invalid'),
             'admin_base_path.regex' => __('admin.site_settings.error.admin_base_path_invalid'),
             'admin_base_path.not_in' => __('admin.site_settings.error.admin_base_path_reserved'),
+            'site_police_beian_code.regex' => __('admin.site_settings.error.site_police_beian_code_invalid'),
         ]);
 
         try {
@@ -95,6 +100,9 @@ class SiteSettingsController extends Controller
             'site_description' => trim((string) ($payload['site_description'] ?? '')),
             'site_keywords' => trim((string) ($payload['site_keywords'] ?? '')),
             'copyright_info' => trim((string) ($payload['copyright_info'] ?? '')),
+            'site_icp_beian' => trim((string) ($payload['site_icp_beian'] ?? '')),
+            'site_police_beian' => trim((string) ($payload['site_police_beian'] ?? '')),
+            'site_police_beian_code' => trim((string) ($payload['site_police_beian_code'] ?? '')),
             'site_logo' => trim((string) ($payload['site_logo'] ?? '')),
             'site_favicon' => trim((string) ($payload['site_favicon'] ?? '')),
             'analytics_code' => trim((string) ($payload['analytics_code'] ?? '')),
@@ -223,6 +231,9 @@ class SiteSettingsController extends Controller
      *   site_description:string,
      *   site_keywords:string,
      *   copyright_info:string,
+     *   site_icp_beian:string,
+     *   site_police_beian:string,
+     *   site_police_beian_code:string,
      *   site_logo:string,
      *   site_favicon:string,
      *   analytics_code:string,
@@ -244,6 +255,9 @@ class SiteSettingsController extends Controller
             'site_description' => '基于AI的智能内容生成与发布平台',
             'site_keywords' => 'AI内容生成,GEO优化,智能发布,内容管理',
             'copyright_info' => '© 2026 GEOFlow. All rights reserved.',
+            'site_icp_beian' => '',
+            'site_police_beian' => '',
+            'site_police_beian_code' => '',
             'site_logo' => '',
             'site_favicon' => '',
             'analytics_code' => '',
@@ -276,6 +290,9 @@ class SiteSettingsController extends Controller
             'site_description' => (string) $stored['site_description'],
             'site_keywords' => (string) $stored['site_keywords'],
             'copyright_info' => (string) $stored['copyright_info'],
+            'site_icp_beian' => (string) $stored['site_icp_beian'],
+            'site_police_beian' => (string) $stored['site_police_beian'],
+            'site_police_beian_code' => (string) $stored['site_police_beian_code'],
             'site_logo' => (string) $stored['site_logo'],
             'site_favicon' => (string) $stored['site_favicon'],
             'analytics_code' => (string) $stored['analytics_code'],
@@ -429,7 +446,6 @@ class SiteSettingsController extends Controller
     }
 
     /**
-     * @param mixed $postedSlides
      * @return array<int, array{image_url:string,title:string,link_url:string,enabled:bool}>
      */
     private function normalizeHomeCarouselSlides(mixed $postedSlides): array

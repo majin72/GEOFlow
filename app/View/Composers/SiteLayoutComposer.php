@@ -21,6 +21,15 @@ final class SiteLayoutComposer
         $copyright = (string) ($map['copyright_info'] ?? '');
         $analyticsCode = (string) ($map['analytics_code'] ?? '');
 
+        // 备案信息：ICP 默认链接到工信部；公安备 record code 填了才拼出 mps 查询链接，否则按纯文本展示。
+        $icpBeian = trim((string) ($map['site_icp_beian'] ?? ''));
+        $policeBeian = trim((string) ($map['site_police_beian'] ?? ''));
+        $policeBeianCode = trim((string) ($map['site_police_beian_code'] ?? ''));
+        $icpBeianUrl = $icpBeian !== '' ? 'https://beian.miit.gov.cn/' : '';
+        $policeBeianUrl = ($policeBeian !== '' && $policeBeianCode !== '')
+            ? 'https://beian.mps.gov.cn/#/query/webSearch?code='.$policeBeianCode
+            : '';
+
         $categories = collect();
         if (Schema::hasTable('categories')) {
             $categories = Category::query()
@@ -39,6 +48,10 @@ final class SiteLayoutComposer
             'siteLogo' => $siteLogo,
             'siteFavicon' => $siteFavicon,
             'footerCopyright' => $copyright,
+            'siteIcpBeian' => $icpBeian,
+            'siteIcpBeianUrl' => $icpBeianUrl,
+            'sitePoliceBeian' => $policeBeian,
+            'sitePoliceBeianUrl' => $policeBeianUrl,
             'headAnalyticsCode' => $analyticsCode,
             'navCategories' => $categories,
         ]);
