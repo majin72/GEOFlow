@@ -83,4 +83,8 @@ return [
     // 会话空闲超时（秒）
     'session_timeout_seconds' => (int) env('GEOFLOW_SESSION_TIMEOUT', 2592000),
 
+    // AI 运维：POST /admin/ai-ops/chat 创建排队 run；GET EventSource …/runs/{id}/stream 在本连接内流式补全并推送 SSE。
+    // 单连接最长秒数（防止 PHP-FPM 被长时间占用；若代理提前断开可调大代理读超时或本值）。
+    'admin_ai_ops_chat_stream_max_seconds' => max(120, min(7200, (int) env('GEOFLOW_ADMIN_AI_OPS_CHAT_STREAM_MAX_SECONDS', 900))),
+
 ];

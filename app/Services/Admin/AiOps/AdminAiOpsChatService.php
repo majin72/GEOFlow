@@ -1,0 +1,190 @@
+<?php
+
+namespace App\Services\Admin\AiOps;
+
+use App\Ai\Agents\AdminAiOpsChatAgent;
+use App\Ai\Tools\AdminOpsAdminActionTool;
+use App\Ai\Tools\AdminOpsArticleSearchPatchTool;
+use App\Ai\Tools\AdminOpsExternalFetchPatchTool;
+use App\Ai\Tools\AdminOpsListCategoriesTool;
+use App\Ai\Tools\AdminOpsListThemesTool;
+use App\Ai\Tools\AdminOpsSetDefaultEmbeddingModelTool;
+use App\Ai\Tools\AdminOpsSiteInfoTool;
+use App\Ai\Tools\AdminOpsSitePatchBasicsTool;
+use App\Ai\Tools\AdminOpsSiteSetActiveThemeTool;
+use App\Ai\Tools\AdminOpsSiteSetArticleAdsTool;
+use App\Ai\Tools\TavilyWebSearchTool;
+use App\Models\AdminAiOpsRun;
+use App\Models\AiModel;
+use App\Support\GeoFlow\ApiKeyCrypto;
+use App\Support\GeoFlow\OpenAiRuntimeProvider;
+use Closure;
+use Laravel\Ai\Contracts\Conversational;
+use Laravel\Ai\Messages\Message;
+use Laravel\Ai\Messages\MessageRole;
+use Laravel\Ai\Streaming\Events\TextDelta;
+use RuntimeException;
+
+/**
+ * AI 运维对话：向配置的聊天模型发起补全（站点读/写、主题、栏目、统一后台动作、广告、联网搜索与外部抓取等工具，支持流式增量回调）。
+ */
+class AdminAiOpsChatService
+{
+    /**
+     * 历史轮次在拼入 messages() 时的总字符预算（与原先单条合并提示的上限一致，从最早轮开始丢弃）。
+     */
+    private const PRIOR_CONVERSATION_CHAR_BUDGET = 12000;
+
+    /**
+     * @param  ApiKeyCrypto  $apiKeyCrypto  用于解密 ai_models 表中的密文 API Key
+     * @param  TavilyWebSearchTool  $tavilyWebSearchTool  公开网络事实检索（Tavily，与站点「文章搜索」配置 patch 不同）
+     */
+    public function __construct(
+        private readonly ApiKeyCrypto $apiKeyCrypto,
+        private readonly AdminOpsSiteInfoTool $siteInfoTool,
+        private readonly AdminOpsListThemesTool $listThemesTool,
+        private readonly AdminOpsListCategoriesTool $listCategoriesTool,
+        private readonly AdminOpsAdminActionTool $adminActionTool,
+        private readonly AdminOpsSitePatchBasicsTool $sitePatchBasicsTool,
+        private readonly AdminOpsSiteSetActiveThemeTool $siteSetActiveThemeTool,
+        private readonly AdminOpsSiteSetArticleAdsTool $siteSetArticleAdsTool,
+        private readonly AdminOpsArticleSearchPatchTool $articleSearchPatchTool,
+        private readonly AdminOpsExternalFetchPatchTool $externalFetchPatchTool,
+        private readonly TavilyWebSearchTool $tavilyWebSearchTool,
+        private readonly AdminOpsSetDefaultEmbeddingModelTool $setDefaultEmbeddingModelTool,
+    ) {}
+
+    /**
+     * 将当前 run 之前本会话内已结束的轮次转为 Laravel AI SDK 所需的 history 消息列表。
+     *
+     * @return array<int, Message>
+     */
+    public function priorMessagesBeforeRun(int $sessionId, int $beforeRunId): array
+    {
+        $rows = AdminAiOpsRun::query()
+            ->where('session_id', $sessionId)
+            ->where('id', '<', $beforeRunId)
+            ->whereIn('status', ['completed', 'failed'])
+            ->orderBy('id')
+            ->get(['input_text', 'result_summary', 'error_message', 'status']);
+
+        /** @var array<int, array{user: string, assistant: string}> $pairs */
+        $pairs = [];
+        foreach ($rows as $row) {
+            $userLine = trim((string) ($row->input_text ?? ''));
+            if ($userLine === '') {
+                continue;
+            }
+            if ((string) $row->status === 'completed') {
+                $assistantLine = trim((string) ($row->result_summary ?? ''));
+            } else {
+                $assistantLine = trim((string) ($row->error_message ?? ''));
+                if ($assistantLine === '') {
+                    $assistantLine = '（本轮未成功完成。）';
+                }
+            }
+            $pairs[] = ['user' => $userLine, 'assistant' => $assistantLine];
+        }
+
+        while ($this->priorPairsEstimatedChars($pairs) > self::PRIOR_CONVERSATION_CHAR_BUDGET && $pairs !== []) {
+            array_shift($pairs);
+        }
+
+        $messages = [];
+        foreach ($pairs as $pair) {
+            $messages[] = new Message(MessageRole::User, $pair['user']);
+            $messages[] = new Message(MessageRole::Assistant, $pair['assistant']);
+        }
+
+        return $messages;
+    }
+
+    /**
+     * 流式调用模型：在每个文本增量上回调当前累积全文，最终返回去首尾空白后的完整回复。
+     *
+     * @param  string  $currentUserMessage  本轮用户输入（单独作为最后一条 user 消息，与 {@see Conversational::messages()} 衔接）
+     * @param  array<int, Message>  $priorConversationMessages  由 {@see priorMessagesBeforeRun()} 等构造的历史消息
+     * @param  AiModel  $aiModel  已校验为启用的聊天模型
+     * @param  Closure(string): void  $onTextAccumulated  每当有新的可见文本 token 时传入当前全文
+     * @param  (Closure(object): void)|null  $onRawModelStreamEvent  每收到一条 SDK 流事件时回调（含 tool_call、text_delta 等原始结构）
+     * @param  (Closure(array<string, mixed>): void)|null  $onLlmStreamFinished  流结束后回调（含 invocation_id、usage、合并正文等）
+     * @return string 助手纯文本（与最后一次回调累积一致，经 trim）
+     *
+     * @throws \Throwable 底层 HTTP/SDK 异常原样抛出，由控制器统一归一化错误文案
+     */
+    public function streamAssistantReply(
+        string $currentUserMessage,
+        array $priorConversationMessages,
+        AiModel $aiModel,
+        Closure $onTextAccumulated,
+        ?Closure $onRawModelStreamEvent = null,
+        ?Closure $onLlmStreamFinished = null,
+    ): string {
+        $providerUrl = OpenAiRuntimeProvider::resolveChatBaseUrl((string) ($aiModel->api_url ?? ''));
+        $apiKey = $this->apiKeyCrypto->decrypt((string) ($aiModel->getRawOriginal('api_key') ?? ''));
+        $modelId = trim((string) ($aiModel->model_id ?? ''));
+
+        if ($providerUrl === '' || $apiKey === '' || $modelId === '') {
+            throw new RuntimeException('AI 模型配置不完整');
+        }
+
+        $driver = OpenAiRuntimeProvider::resolveChatDriver($providerUrl, $modelId);
+        $providerName = OpenAiRuntimeProvider::registerProvider('admin_ai_ops_chat', $driver, $providerUrl, $apiKey);
+
+        $agent = new AdminAiOpsChatAgent(
+            tools: [
+                $this->siteInfoTool,
+                $this->listThemesTool,
+                $this->listCategoriesTool,
+                $this->adminActionTool,
+                $this->sitePatchBasicsTool,
+                $this->siteSetActiveThemeTool,
+                $this->siteSetArticleAdsTool,
+                $this->articleSearchPatchTool,
+                $this->externalFetchPatchTool,
+                $this->tavilyWebSearchTool,
+                $this->setDefaultEmbeddingModelTool,
+            ],
+            priorConversationMessages: $priorConversationMessages,
+        );
+        $stream = $agent->stream($currentUserMessage, [], $providerName, $modelId);
+
+        $manual = '';
+        foreach ($stream as $event) {
+            if ($onRawModelStreamEvent instanceof Closure) {
+                $onRawModelStreamEvent($event);
+            }
+            if ($event instanceof TextDelta) {
+                $manual .= $event->delta;
+                $onTextAccumulated($manual);
+            }
+        }
+
+        $final = trim((string) ($stream->text ?? $manual));
+
+        if ($onLlmStreamFinished instanceof Closure) {
+            $onLlmStreamFinished([
+                'invocation_id' => $stream->invocationId,
+                'final_text' => (string) ($stream->text ?? $manual),
+                'final_text_trimmed' => $final,
+                'usage' => $stream->usage?->toArray(),
+                'events_count' => $stream->events->count(),
+            ]);
+        }
+
+        return $final;
+    }
+
+    /**
+     * @param  array<int, array{user: string, assistant: string}>  $pairs
+     */
+    private function priorPairsEstimatedChars(array $pairs): int
+    {
+        $total = 0;
+        foreach ($pairs as $pair) {
+            $total += mb_strlen($pair['user']) + mb_strlen($pair['assistant']);
+        }
+
+        return $total;
+    }
+}

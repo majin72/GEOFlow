@@ -5,6 +5,7 @@
  */
 
 use App\Http\Controllers\Admin\AdminActivityLogController;
+use App\Http\Controllers\Admin\AdminAiOpsController;
 use App\Http\Controllers\Admin\AdminAuthController;
 use App\Http\Controllers\Admin\AdminUserController;
 use App\Http\Controllers\Admin\AdminWelcomeController;
@@ -13,6 +14,7 @@ use App\Http\Controllers\Admin\AiPromptController;
 use App\Http\Controllers\Admin\AiSpecialPromptController;
 use App\Http\Controllers\Admin\ApiTokenController;
 use App\Http\Controllers\Admin\ArticleController;
+use App\Http\Controllers\Admin\ArticleSearchSettingsController;
 use App\Http\Controllers\Admin\AuthorController;
 use App\Http\Controllers\Admin\CategoryController;
 use App\Http\Controllers\Admin\DashboardController;
@@ -179,6 +181,16 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
         });
 
         // 业务页面
+        Route::prefix('ai-ops')->name('ai-ops.')->group(function () {
+            Route::get('/', [AdminAiOpsController::class, 'index'])->name('index');
+            Route::get('sessions', [AdminAiOpsController::class, 'sessions'])->name('sessions.index');
+            Route::post('sessions', [AdminAiOpsController::class, 'createSession'])->name('sessions.store');
+            Route::get('sessions/{sessionId}', [AdminAiOpsController::class, 'showSession'])->name('sessions.show')->whereNumber('sessionId');
+            Route::post('chat', [AdminAiOpsController::class, 'chat'])->name('chat');
+            Route::get('runs/{runId}/stream', [AdminAiOpsController::class, 'stream'])->name('runs.stream')->whereNumber('runId');
+        });
+
+        // 业务页面
         Route::get('materials', [MaterialsController::class, 'index'])->name('materials.index');
         Route::get('url-import', [UrlImportController::class, 'index'])->name('url-import');
         Route::post('url-import', [UrlImportController::class, 'store'])->name('url-import.store');
@@ -221,6 +233,8 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
             Route::post('/', [SiteSettingsController::class, 'update'])->name('update');
             Route::post('theme', [SiteSettingsController::class, 'updateTheme'])->name('theme');
             Route::post('article-detail-ads', [SiteSettingsController::class, 'updateArticleDetailAds'])->name('ads');
+            Route::get('article-search', [ArticleSearchSettingsController::class, 'index'])->name('article-search');
+            Route::post('article-search', [ArticleSearchSettingsController::class, 'update'])->name('article-search.update');
             Route::get('external-fetch', [ExternalFetchSettingsController::class, 'index'])->name('external-fetch');
             Route::post('external-fetch', [ExternalFetchSettingsController::class, 'update'])->name('external-fetch.update');
             Route::get('sensitive-words', [SecuritySettingsController::class, 'index'])->name('sensitive-words');

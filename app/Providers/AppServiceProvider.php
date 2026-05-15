@@ -6,6 +6,8 @@ use App\Models\Admin;
 use App\Services\Admin\AdminUpdateMetadataService;
 use App\Services\Admin\AdminWelcomeModalService;
 use App\Services\GeoFlow\ArticleGeoFlowService;
+use App\Services\GeoFlow\ArticleSearch\ArticleSearchConfig;
+use App\Services\GeoFlow\ArticleSearch\TavilyArticleSearchService;
 use App\Services\GeoFlow\ExternalFetch\ExternalFetchConfig;
 use App\Services\GeoFlow\ExternalFetch\ExternalFetchService;
 use App\Services\GeoFlow\HorizonMetricsAdapter;
@@ -13,6 +15,7 @@ use App\Services\GeoFlow\JobQueueService;
 use App\Services\GeoFlow\TaskLifecycleService;
 use App\Services\GeoFlow\TaskMonitoringQueryService;
 use App\View\Composers\SiteLayoutComposer;
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
@@ -33,6 +36,13 @@ class AppServiceProvider extends ServiceProvider
             return new ExternalFetchService(
                 ExternalFetchConfig::fromSettings(),
                 $app->make(HttpFactory::class),
+            );
+        });
+        $this->app->bind(TavilyArticleSearchService::class, function ($app): TavilyArticleSearchService {
+            return new TavilyArticleSearchService(
+                ArticleSearchConfig::fromSettings(),
+                $app->make(HttpFactory::class),
+                $app->make(CacheRepository::class),
             );
         });
     }

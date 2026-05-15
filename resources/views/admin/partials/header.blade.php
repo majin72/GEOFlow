@@ -21,6 +21,7 @@
         'tasks' => ['route' => 'admin.tasks.index', 'name' => __('admin.nav.tasks')],
         'articles' => ['route' => 'admin.articles.index', 'name' => __('admin.nav.articles')],
         'materials' => ['route' => 'admin.materials.index', 'name' => __('admin.nav.materials')],
+        'ai_ops' => ['route' => 'admin.ai-ops.index', 'name' => __('admin.nav.ai_ops')],
         'ai_config' => ['route' => 'admin.ai.configurator', 'name' => __('admin.nav.ai_config')],
         'site_settings' => ['route' => 'admin.site-settings.index', 'name' => __('admin.nav.site_settings')],
     ];
@@ -82,6 +83,12 @@
         'admin.api-tokens.store' => 'admin_users',
         'admin.api-tokens.revoke' => 'admin_users',
         'admin.admin-activity-logs' => 'admin_users',
+        'admin.ai-ops.index' => 'ai_ops',
+        'admin.ai-ops.sessions.index' => 'ai_ops',
+        'admin.ai-ops.sessions.store' => 'ai_ops',
+        'admin.ai-ops.sessions.show' => 'ai_ops',
+        'admin.ai-ops.chat' => 'ai_ops',
+        'admin.ai-ops.runs.stream' => 'ai_ops',
     ];
     $routeName = request()->route()?->getName();
     $resolvedActive = $activeMenu;

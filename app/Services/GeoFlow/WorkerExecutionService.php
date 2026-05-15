@@ -3,6 +3,7 @@
 namespace App\Services\GeoFlow;
 
 use App\Ai\Agents\MarkdownContentWriterAgent;
+use App\Ai\Tools\TavilyWebSearchTool;
 use App\Models\AiModel;
 use App\Models\Article;
 use App\Models\ArticleImage;
@@ -14,6 +15,7 @@ use App\Models\KnowledgeChunk;
 use App\Models\Prompt;
 use App\Models\Task;
 use App\Models\Title;
+use App\Services\GeoFlow\ArticleSearch\TavilyArticleSearchService;
 use App\Support\GeoFlow\ApiKeyCrypto;
 use App\Support\GeoFlow\ArticleWorkflow;
 use App\Support\GeoFlow\ImageUrlNormalizer;
@@ -32,7 +34,8 @@ class WorkerExecutionService
      */
     public function __construct(
         private readonly ApiKeyCrypto $apiKeyCrypto,
-        private readonly KnowledgeChunkSyncService $knowledgeChunkSyncService
+        private readonly KnowledgeChunkSyncService $knowledgeChunkSyncService,
+        private readonly TavilyArticleSearchService $articleSearchService
     ) {}
 
     /**
@@ -167,6 +170,7 @@ class WorkerExecutionService
                 'used_model_id' => (int) $aiModel->id,
                 'used_model_name' => (string) $aiModel->name,
                 'model_attempts' => $generation['attempts'],
+                'article_search_enabled' => (bool) ($generation['article_search_enabled'] ?? false),
             ],
         ];
     }
@@ -324,6 +328,7 @@ class WorkerExecutionService
                     'content' => $content,
                     'model' => $candidate,
                     'attempts' => $attempts,
+                    'article_search_enabled' => $this->articleSearchService->isEnabled(),
                 ];
             } catch (Throwable $exception) {
                 $lastMessage = trim($exception->getMessage());
@@ -785,7 +790,10 @@ class WorkerExecutionService
 
         $driver = OpenAiRuntimeProvider::resolveChatDriver($providerUrl, (string) ($aiModel->model_id ?? ''));
         $providerName = OpenAiRuntimeProvider::registerProvider('worker', $driver, $providerUrl, $apiKey);
-        $agent = new MarkdownContentWriterAgent;
+        $agent = new MarkdownContentWriterAgent(
+            instructions: $this->buildWriterInstructions(),
+            tools: $this->buildWriterTools(),
+        );
 
         try {
             $response = $agent->prompt($contentPrompt, [], $providerName, (string) ($aiModel->model_id ?? ''));
@@ -810,6 +818,33 @@ class WorkerExecutionService
         ]);
 
         return $content;
+    }
+
+    /**
+     * 构建正文生成 Agent 的系统指令。
+     */
+    private function buildWriterInstructions(): string
+    {
+        $instructions = '你是专业中文写作助手，请输出高质量、可发布的 Markdown 文章。';
+        if (! $this->articleSearchService->isEnabled()) {
+            return $instructions;
+        }
+
+        return $instructions."\n".'当文章需要最新事实、市场信息、数据来源或背景资料时，可以调用 TavilyWebSearchTool 联网搜索；使用搜索信息时请在正文中保留可核验的来源 URL。';
+    }
+
+    /**
+     * 构建正文生成可用的 Tools。
+     *
+     * @return list<object>
+     */
+    private function buildWriterTools(): array
+    {
+        if (! $this->articleSearchService->isEnabled()) {
+            return [];
+        }
+
+        return [new TavilyWebSearchTool($this->articleSearchService)];
     }
 
     /**

@@ -1,0 +1,74 @@
+<?php
+
+namespace App\Ai\Agents;
+
+use Laravel\Ai\Attributes\MaxSteps;
+use Laravel\Ai\Attributes\Timeout;
+use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Contracts\Conversational;
+use Laravel\Ai\Contracts\HasTools;
+use Laravel\Ai\Contracts\Tool;
+use Laravel\Ai\Messages\Message;
+use Laravel\Ai\Promptable;
+use Laravel\Ai\Providers\Tools\ProviderTool;
+
+/**
+ * 后台 AI 运维对话 Agent：挂载站点读/写、主题、栏目、广告、抓取与 Tavily 联网搜索等工具。
+ *
+ * 通过 {@see Conversational} 将历史以标准多轮消息交给 SDK；本轮用户输入仅通过 {@see Promptable::stream()} 的 prompt 传入。
+ */
+#[MaxSteps(48)]
+#[Timeout(600)]
+class AdminAiOpsChatAgent implements Agent, Conversational, HasTools
+{
+    use Promptable;
+
+    /**
+     * @param  iterable<int, Tool|ProviderTool>  $tools
+     * @param  array<int, Message>  $priorConversationMessages  当前 run 之前的 user/assistant 消息（不含本轮用户句）
+     */
+    public function __construct(
+        private readonly iterable $tools = [],
+        private readonly array $priorConversationMessages = [],
+    ) {}
+
+    /**
+     * {@inheritdoc}
+     *
+     * @return iterable<int, Message>
+     */
+    public function messages(): iterable
+    {
+        return $this->priorConversationMessages;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function instructions(): string
+    {
+        return <<<'TXT'
+你是 GEOFlow 后台运维对话助手。使用简体中文，语气专业、简洁。
+- 读取站点事实（名称、备案、分页、主题、广告 JSON、统计代码片段等）时，必须先调用 AdminOpsSiteInfoTool（必要时 scope=full），不得凭记忆编造。
+- 用户询问「有哪些栏目」「文章分类」时，可先调用 AdminOpsListCategoriesTool（轻量只读）或 AdminOpsAdminActionTool read op=categories_list；栏目增删改用 AdminOpsAdminActionTool（write: category_create|category_update|category_delete）或后台栏目管理。
+- 仪表盘、任务、文章、作者、敏感词、素材库、URL 导入、AI 模型/提示词等后台能力，优先使用 AdminOpsAdminActionTool（kind=read|write, op, payload_json）；不得使用本工具访问管理员账号、API Token、活动日志或改密相关能力。
+- 切换主题前必须先调用 AdminOpsListThemesTool 确认 theme_id，再调用 AdminOpsSiteSetActiveThemeTool。
+- 修改站点文案、SEO、轮播、分页、后台路径等，使用 AdminOpsSitePatchBasicsTool（patch_json 仅含变更字段）；修改 admin_base_path 会改写路由缓存，仅在用户明确要求时执行，并提示其保存后需使用新 URL 登录后台。
+- 文章详情广告位使用 AdminOpsSiteSetArticleAdsTool 覆盖写入；站点「文章联网搜索 / 外部抓取」集成配置分别使用 AdminOpsArticleSearchPatchTool、AdminOpsExternalFetchPatchTool（均为合并 patch_json），二者不负责代用户上网查资料。需要公开网络事实、行业动态、新闻与来源摘要时，调用 TavilyWebSearchTool（query 为简短英文或中英文检索词）；若返回提示未启用或未配置 API Key，如实告知用户去站点搜索配置中补齐 Tavily。
+- 默认 embedding 模型使用 AdminOpsSetDefaultEmbeddingModelTool（model_id 为 ai_models 主键或 0 清除）。
+- 任何写入工具返回 ok:false 时，向用户说明原因与校验错误，不要假装已成功。
+- 在发起工具调用之前，可用一两句简短过渡语说明将查询或修改后台配置，避免长时间无任何可见正文。
+- 若问题与站点管理无关，可直接回答。
+TXT;
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * @return iterable<int, Tool|ProviderTool>
+     */
+    public function tools(): iterable
+    {
+        return $this->tools;
+    }
+}

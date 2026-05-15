@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Category;
+use App\Services\Admin\AdminOps\AdminOpsCategoryReadService;
 use App\Support\AdminWeb;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -18,6 +19,10 @@ use Illuminate\View\View;
  */
 class CategoryController extends Controller
 {
+    public function __construct(
+        private readonly AdminOpsCategoryReadService $categoryRead,
+    ) {}
+
     /**
      * 栏目列表页。
      */
@@ -27,7 +32,7 @@ class CategoryController extends Controller
             'pageTitle' => __('admin.categories.page_title'),
             'activeMenu' => 'articles',
             'adminSiteName' => AdminWeb::siteName(),
-            'categories' => $this->loadCategories(),
+            'categories' => $this->categoryRead->listCategoriesWithArticleCounts(),
         ]);
     }
 
@@ -151,34 +156,6 @@ class CategoryController extends Controller
         Category::query()->whereKey($categoryId)->delete();
 
         return redirect()->route('admin.categories.index')->with('message', __('admin.categories.message.delete_success'));
-    }
-
-    /**
-     * 读取分类列表并附带文章数量。
-     *
-     * @return array<int, array{id:int,name:string,slug:string,description:string,sort_order:int,article_count:int,created_at:?string}>
-     */
-    private function loadCategories(): array
-    {
-        $query = Category::query()
-            ->select(['id', 'name', 'slug', 'description', 'sort_order', 'created_at'])
-            ->withCount('articles')
-            ->orderBy('sort_order')
-            ->orderBy('name');
-
-        return $query->get()
-            ->map(static function (Category $category): array {
-                return [
-                    'id' => (int) $category->id,
-                    'name' => (string) $category->name,
-                    'slug' => (string) ($category->slug ?? ''),
-                    'description' => (string) ($category->description ?? ''),
-                    'sort_order' => (int) ($category->sort_order ?? 0),
-                    'article_count' => (int) ($category->articles_count ?? 0),
-                    'created_at' => $category->created_at?->format('Y-m-d H:i:s'),
-                ];
-            })
-            ->all();
     }
 
     /**
