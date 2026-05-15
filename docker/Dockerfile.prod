@@ -1,14 +1,24 @@
-FROM composer:2 AS vendor
+# 勿使用裸标签 composer:2：官方常解析为 PHP 8.1，无法满足本项目 composer.json（^8.2）及锁文件中 Symfony 8 / 等 8.4 依赖。
+FROM composer:2-php8.4-bookworm AS vendor
 
 WORKDIR /app
 
-# Alpine 国内源（阿里云）加速 docker-php-ext-install pcntl 所需的 apk 编译工具链（gcc/m4/perl 等）
-RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories
+# Debian Bookworm：阿里云 apt（与下方 php:8.4-fpm-bookworm 同源，便于扩展编译）
+RUN set -eux; \
+    for f in /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list /etc/apt/sources.list.d/debian.list; do \
+        [ -f "$f" ] || continue; \
+        sed -i \
+            -e 's|https://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g' \
+            -e 's|http://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g' \
+            -e 's|https://security.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' \
+            -e 's|http://security.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' \
+            "$f"; \
+    done
 
-# Composer 国内镜像（阿里云全量），加速后续 packagist 包下载
+# Composer 国内镜像（阿里云 Packagist）
 RUN composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/
 
-# composer:2 基础镜像未默认启用 pcntl；Horizon 在 install 时会校验 ext-pcntl（运行阶段已安装，此处对齐锁文件平台检查）
+# 与运行时 Horizon / 锁文件平台检查一致，需 ext-pcntl
 RUN docker-php-ext-install pcntl
 
 COPY composer.json composer.lock ./
