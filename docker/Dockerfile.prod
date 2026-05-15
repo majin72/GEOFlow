@@ -21,6 +21,11 @@ RUN composer install \
 
 COPY . .
 
+# .dockerignore 排除了 .env，构建期 Laravel 默认 DB_CONNECTION=sqlite 且路径为 database/database.sqlite；
+# AppServiceProvider 注册链会触发 SiteSettingsBag → Schema::hasTable，需存在可连接的空库文件。
+RUN mkdir -p database \
+    && touch database/database.sqlite
+
 RUN composer dump-autoload \
     --no-dev \
     --no-interaction \
