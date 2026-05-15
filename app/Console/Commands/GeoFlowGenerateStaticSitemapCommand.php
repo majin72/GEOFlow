@@ -8,11 +8,11 @@ use App\Support\Site\SiteStaticSitemapBuilder;
 use Illuminate\Console\Command;
 
 /**
- * 生成静态 sitemap.xml 至 public 目录，供 Web 服务器直出；生产环境由调度每日刷新。
+ * 生成静态 sitemap.xml（默认 storage/app/public，与生产 Docker storage 卷共享）；生产环境由调度每日刷新。
  */
 class GeoFlowGenerateStaticSitemapCommand extends Command
 {
-    protected $signature = 'geoflow:generate-static-sitemap {--path= : 输出绝对或相对路径，默认 public/sitemap.xml}';
+    protected $signature = 'geoflow:generate-static-sitemap {--path= : 输出绝对或相对路径，默认 storage/app/public/sitemap.xml}';
 
     protected $description = 'Write a static sitemap.xml for the public site (home, archive, categories, articles)';
 
@@ -28,7 +28,7 @@ class GeoFlowGenerateStaticSitemapCommand extends Command
     public function handle(): int
     {
         $raw = trim((string) $this->option('path'));
-        $target = $raw !== '' ? $this->normalizePath($raw) : public_path('sitemap.xml');
+        $target = $raw !== '' ? $this->normalizePath($raw) : SiteStaticSitemapBuilder::defaultOutputPath();
 
         $written = $this->builder->writeToPath($target);
         $this->info('Sitemap written: '.$written);

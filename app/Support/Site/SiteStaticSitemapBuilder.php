@@ -15,6 +15,37 @@ use Illuminate\Support\Facades\Schema;
 final class SiteStaticSitemapBuilder
 {
     /**
+     * 默认落盘路径：写在 storage/app/public，与 docker-compose 宿主机 ./storage 挂载一致，
+     * 便于 PHP-FPM 容器写、Nginx 容器读；无需与镜像内 public 目录同步。
+     */
+    public static function defaultOutputPath(): string
+    {
+        return storage_path('app/public/sitemap.xml');
+    }
+
+    /**
+     * 分片文件落盘路径（URL：/sitemaps/{segment}.xml）。生成命令写入同一相对规则即可。
+     *
+     * @param  non-empty-string  $segment
+     */
+    public static function chunkOutputPath(string $segment): string
+    {
+        if (! self::isValidChunkSegment($segment)) {
+            throw new \InvalidArgumentException('Invalid sitemap segment.');
+        }
+
+        return storage_path('app/public/sitemaps/'.$segment.'.xml');
+    }
+
+    /**
+     * 分片文件名片段校验（仅字母数字、连字符、下划线，防路径穿越）。
+     */
+    public static function isValidChunkSegment(string $segment): bool
+    {
+        return $segment !== '' && (bool) preg_match('/^[a-zA-Z0-9_-]{1,64}$/', $segment);
+    }
+
+    /**
      * 组装完整 XML 文档（含 urlset 与若干 url 节点）。
      */
     public function buildXml(): string
@@ -88,7 +119,7 @@ final class SiteStaticSitemapBuilder
     }
 
     /**
-     * 将 XML 写入磁盘（UTF-8），默认 public/sitemap.xml。
+     * 将 XML 写入磁盘（UTF-8）；默认路径见 {@see defaultOutputPath()}。
      *
      * @return string 实际写入的绝对路径
      */

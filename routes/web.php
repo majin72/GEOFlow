@@ -33,6 +33,7 @@ use App\Http\Controllers\Site\ArchiveController;
 use App\Http\Controllers\Site\ArticleController as SiteArticleController;
 use App\Http\Controllers\Site\CategoryController as SiteCategoryController;
 use App\Http\Controllers\Site\HomeController;
+use App\Http\Controllers\Site\SitemapXmlController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 
@@ -44,6 +45,10 @@ Route::middleware(['site.locale'])->group(function (): void {
         ->where(['year' => '[0-9]{4}', 'month' => '[0-9]{2}']);
     Route::get('/category/{slug}', [SiteCategoryController::class, 'show'])->name('site.category');
     Route::get('/article/{slug}', [SiteArticleController::class, 'show'])->name('site.article');
+    Route::get('/sitemap.xml', [SitemapXmlController::class, 'main'])->name('site.sitemap.static');
+    Route::get('/sitemaps/{segment}.xml', [SitemapXmlController::class, 'chunk'])
+        ->where('segment', '[a-zA-Z0-9_-]{1,64}')
+        ->name('site.sitemap.chunk');
 });
 
 $adminPrefix = trim((string) config('geoflow.admin_base_path', '/geo_admin'), '/');

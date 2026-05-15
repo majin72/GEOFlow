@@ -15,7 +15,7 @@ class GeoFlowGenerateStaticSitemapCommandTest extends TestCase
     use RefreshDatabase;
 
     /**
-     * 校验命令生成 public/sitemap.xml 且包含首页与文章地址。
+     * 校验命令生成 sitemap 文件且包含首页与文章地址（示例使用临时路径）。
      */
     public function test_command_writes_sitemap_with_article_url(): void
     {
