@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Admin\AdminOps;
 
 use App\Ai\Tools\AdminOpsAdminActionTool;
+use App\Models\Category;
 use App\Services\Admin\AdminOps\AdminAction\AdminOpsMirrorArticlesHandler;
 use App\Services\Admin\AdminOps\AdminAction\AdminOpsMirrorAuthorsHandler;
 use App\Services\Admin\AdminOps\AdminAction\AdminOpsMirrorDashboardHandler;
@@ -116,8 +117,11 @@ final class AdminOpsAdminActionService
             'sensitive_words_add' => $this->mergeOk($this->sensitiveWords->addWords((string) ($p['words'] ?? ''))),
             'sensitive_words_delete' => $this->mergeOk($this->sensitiveWords->deleteWord((int) ($p['word_id'] ?? 0))),
             'category_create' => $this->mergeOk($this->categoryWrite->store((array) ($p['payload'] ?? $p))),
-            'category_update' => $this->mergeOk($this->categoryWrite->update((int) ($p['category_id'] ?? 0), (array) ($p['payload'] ?? $p))),
-            'category_delete' => $this->mergeOk($this->categoryWrite->destroy((int) ($p['category_id'] ?? 0))),
+            'category_update' => $this->mergeOk($this->categoryWrite->update(
+                $this->resolveCategoryIdForOps($p),
+                $this->categoryWritePayloadStripped($p),
+            )),
+            'category_delete' => $this->mergeOk($this->categoryWrite->destroy($this->resolveCategoryIdForOps($p))),
             'author_create' => $this->mergeOk($this->authors->create((array) ($p['payload'] ?? $p))),
             'author_update' => $this->mergeOk($this->authors->update((int) ($p['author_id'] ?? 0), (array) ($p['payload'] ?? $p))),
             'author_delete' => $this->mergeOk($this->authors->delete((int) ($p['author_id'] ?? 0))),
@@ -210,5 +214,71 @@ final class AdminOpsAdminActionService
         }
 
         return array_values(array_filter(array_map(static fn ($v): int => (int) $v, $raw), static fn (int $id): bool => $id > 0));
+    }
+
+    /**
+     * 解析栏目主键：兼容 LLM 误传 id、把 id 放进 payload、或仅用 slug/name 定位（与 category_id 等价）。
+     *
+     * @param  array<string, mixed>  $p
+     */
+    private function resolveCategoryIdForOps(array $p): int
+    {
+        $nested = is_array($p['payload'] ?? null) ? $p['payload'] : [];
+        $candidates = [
+            (int) ($p['category_id'] ?? 0),
+            (int) ($p['id'] ?? 0),
+            (int) ($nested['category_id'] ?? 0),
+            (int) ($nested['id'] ?? 0),
+        ];
+        foreach ($candidates as $id) {
+            if ($id > 0) {
+                return $id;
+            }
+        }
+
+        $slug = trim((string) ($p['slug'] ?? $p['category_slug'] ?? ''));
+        if ($slug === '' && is_array($nested)) {
+            $slug = trim((string) ($nested['slug'] ?? $nested['category_slug'] ?? ''));
+        }
+        if ($slug !== '') {
+            $found = Category::query()->where('slug', $slug)->value('id');
+
+            return $found ? (int) $found : 0;
+        }
+
+        $nameLookup = array_values(array_filter([
+            trim((string) ($p['category_name'] ?? '')),
+            is_array($nested) ? trim((string) ($nested['category_name'] ?? '')) : '',
+            is_array($nested) ? trim((string) ($nested['name'] ?? '')) : '',
+            trim((string) ($p['name'] ?? '')),
+        ], static fn (string $s): bool => $s !== ''));
+        foreach ($nameLookup as $nm) {
+            $found = Category::query()->where('name', $nm)->orderBy('id')->value('id');
+            if ($found) {
+                return (int) $found;
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * 栏目写入校验用的 body：去掉仅用于定位的字段，避免与 Category 校验规则冲突。
+     *
+     * @param  array<string, mixed>  $p
+     * @return array<string, mixed>
+     */
+    private function categoryWritePayloadStripped(array $p): array
+    {
+        $body = is_array($p['payload'] ?? null) ? $p['payload'] : $p;
+        if (! is_array($body)) {
+            return [];
+        }
+        $body = [...$body];
+        foreach (['category_id', 'id', 'slug', 'category_slug', 'category_name', 'payload', 'kind', 'op'] as $k) {
+            unset($body[$k]);
+        }
+
+        return $body;
     }
 }

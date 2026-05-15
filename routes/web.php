@@ -188,6 +188,15 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
             Route::get('sessions/{sessionId}', [AdminAiOpsController::class, 'showSession'])->name('sessions.show')->whereNumber('sessionId');
             Route::post('chat', [AdminAiOpsController::class, 'chat'])->name('chat');
             Route::get('runs/{runId}/stream', [AdminAiOpsController::class, 'stream'])->name('runs.stream')->whereNumber('runId');
+            Route::get('runs/{runId}/resume-stream', [AdminAiOpsController::class, 'resumeStream'])->name('runs.resume-stream')->whereNumber('runId');
+            Route::post('runs/{runId}/tool-approvals/{approvalId}/approve', [AdminAiOpsController::class, 'approveToolApproval'])
+                ->name('runs.tool-approvals.approve')
+                ->whereNumber('runId')
+                ->whereUuid('approvalId');
+            Route::post('runs/{runId}/tool-approvals/{approvalId}/reject', [AdminAiOpsController::class, 'rejectToolApproval'])
+                ->name('runs.tool-approvals.reject')
+                ->whereNumber('runId')
+                ->whereUuid('approvalId');
         });
 
         // 业务页面

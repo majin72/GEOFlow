@@ -6,14 +6,19 @@ use App\Http\Controllers\Controller;
 use App\Models\Admin;
 use App\Models\AdminAiOpsRun;
 use App\Models\AdminAiOpsSession;
+use App\Models\AdminAiOpsToolApproval;
 use App\Models\AiModel;
 use App\Services\Admin\AiOps\AdminAiOpsChatService;
 use App\Services\Admin\AiOps\AdminAiOpsRunService;
+use App\Services\Admin\AiOps\AdminAiOpsStreamContext;
+use App\Services\Admin\AiOps\AdminAiOpsToolApprovalService;
+use App\Services\Admin\AiOps\Exceptions\AdminAiOpsToolApprovalPendingException;
 use App\Support\AdminWeb;
 use App\Support\GeoFlow\OpenAiRuntimeProvider;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
 use Laravel\Ai\Streaming\Events\StreamStart;
@@ -86,6 +91,18 @@ class AdminAiOpsController extends Controller
     public function showSession(Request $request, int $sessionId, AdminAiOpsRunService $runs): JsonResponse
     {
         $session = $this->findOwnedSession($request, $sessionId);
+
+        $approvalService = app(AdminAiOpsToolApprovalService::class);
+        $awaiting = AdminAiOpsRun::query()
+            ->where('session_id', (int) $session->id)
+            ->where('status', 'awaiting_confirmation')
+            ->get(['id']);
+        foreach ($awaiting as $row) {
+            $runRow = AdminAiOpsRun::query()->find((int) $row->id);
+            if ($runRow instanceof AdminAiOpsRun) {
+                $approvalService->expirePendingIfStale($runRow);
+            }
+        }
 
         return response()->json($this->sessionPayload($session, $runs));
     }
@@ -174,6 +191,16 @@ class AdminAiOpsController extends Controller
 
                 $status = (string) $run->status;
 
+                if ($status === 'awaiting_confirmation') {
+                    app(AdminAiOpsToolApprovalService::class)->expirePendingIfStale($run);
+                    $run = AdminAiOpsRun::query()
+                        ->where('admin_id', $adminId)
+                        ->whereKey($runId)
+                        ->with(['steps', 'attachments', 'aiModel'])
+                        ->first() ?? $run;
+                    $status = (string) $run->status;
+                }
+
                 if (in_array($status, ['completed', 'failed'], true)) {
                     $this->writeAdminAiOpsSseRunEvent($runs->payload($run->fresh(['steps', 'attachments', 'aiModel']) ?? $run));
                     $this->writeAdminAiOpsSseDoneEvent();
@@ -214,32 +241,319 @@ class AdminAiOpsController extends Controller
 
                 $deadline = microtime(true) + $maxSeconds;
 
+                $haltedForApproval = false;
+
+                app()->instance(AdminAiOpsStreamContext::class, new AdminAiOpsStreamContext((int) $run->id, $adminId));
                 try {
-                    $assistantText = $chat->streamAssistantReply(
-                        $currentUserMessage,
-                        $priorMessages,
-                        $aiModel,
-                        function (string $accumulated) use ($deadline): void {
-                            if (microtime(true) > $deadline) {
-                                throw new \RuntimeException('模型输出超过单连接时间上限，已中止。');
-                            }
-                            $this->writeAdminAiOpsSseJsonEvent('delta', ['text' => $accumulated]);
-                        },
-                        function (object $event): void {
-                            $this->emitAdminAiOpsSseFromAiStreamEvent($event);
-                        },
-                        null,
-                    );
+                    try {
+                        $assistantText = $chat->streamAssistantReply(
+                            $currentUserMessage,
+                            $priorMessages,
+                            $aiModel,
+                            function (string $accumulated) use ($deadline): void {
+                                if (microtime(true) > $deadline) {
+                                    throw new \RuntimeException('模型输出超过单连接时间上限，已中止。');
+                                }
+                                if (app()->bound(AdminAiOpsStreamContext::class)) {
+                                    app(AdminAiOpsStreamContext::class)->setPartialAssistantText($accumulated);
+                                }
+                                $this->writeAdminAiOpsSseJsonEvent('delta', ['text' => $accumulated]);
+                            },
+                            function (object $event): void {
+                                $this->emitAdminAiOpsSseFromAiStreamEvent($event);
+                            },
+                            null,
+                        );
+
+                        $assistantText = trim((string) $assistantText);
+
+                        if ($assistantText === '') {
+                            throw new \RuntimeException('模型返回为空');
+                        }
+
+                        $run = $runs->updateRun($run->fresh() ?? $run, [
+                            'status' => 'completed',
+                            'result_summary' => $assistantText,
+                            'finished_at' => now(),
+                        ]);
+                    } catch (AdminAiOpsToolApprovalPendingException $e) {
+                        $haltedForApproval = true;
+                        $this->emitAdminAiOpsSseSyntheticToolDoneForPendingApproval($e);
+                        $freshRun = AdminAiOpsRun::query()
+                            ->whereKey($runId)
+                            ->with(['steps', 'attachments', 'aiModel'])
+                            ->first();
+
+                        $this->writeAdminAiOpsSseJsonEvent('approval_required', [
+                            'approval_id' => $e->approvalId,
+                            'tool_name' => $e->toolName,
+                            'summary' => $e->summary,
+                            'expires_at' => $e->expiresAtIso8601,
+                            'fingerprint' => $e->fingerprint,
+                        ]);
+
+                        $this->writeAdminAiOpsSseRunEvent($runs->payload($freshRun instanceof AdminAiOpsRun ? $freshRun : $run));
+                    } catch (Throwable $e) {
+                        $human = OpenAiRuntimeProvider::normalizeApiException($e, $providerUrl);
+                        $run = $runs->updateRun($run->fresh() ?? $run, [
+                            'status' => 'failed',
+                            'error_message' => $human !== '' ? $human : trim($e->getMessage()),
+                            'finished_at' => now(),
+                        ]);
+                    }
+                } finally {
+                    app()->forgetInstance(AdminAiOpsStreamContext::class);
+                }
+
+                if (! $haltedForApproval) {
+                    $this->writeAdminAiOpsSseRunEvent($runs->payload($run->fresh(['steps', 'attachments', 'aiModel']) ?? $run));
+                }
+                $this->writeAdminAiOpsSseDoneEvent();
+            } catch (Throwable $e) {
+                $this->writeAdminAiOpsSseJsonEvent('stream_error', ['message' => trim($e->getMessage()) ?: 'stream_failed']);
+                $this->writeAdminAiOpsSseDoneEvent();
+            } finally {
+                try {
+                    $lock->release();
+                } catch (Throwable) {
+                    //
+                }
+            }
+        }, 200, $this->adminAiOpsSseResponseHeaders());
+    }
+
+    /**
+     * POST：批准挂起的工具调用（服务端执行已存参数），并返回一次性续流 URL。
+     */
+    public function approveToolApproval(
+        Request $request,
+        int $runId,
+        string $approvalId,
+        AdminAiOpsToolApprovalService $approvals,
+        AdminAiOpsRunService $runs,
+    ): JsonResponse {
+        $this->findOwnedRun($request, $runId);
+
+        /** @var Admin $admin */
+        $admin = $request->user('admin');
+        $approval = $approvals->assertCanDecide($approvalId, (int) $admin->id);
+        $out = $approvals->approveAndPrepareResume($approval, (int) $admin->id, $runId);
+
+        Log::info('admin_ai_ops_tool_approval_approve_http', [
+            'run_id' => $runId,
+            'approval_id' => $approvalId,
+            'admin_id' => (int) $admin->id,
+            'already_executed' => $out['already_executed'],
+        ]);
+
+        $run = AdminAiOpsRun::query()
+            ->whereKey($runId)
+            ->with(['steps', 'attachments', 'aiModel'])
+            ->firstOrFail();
+
+        return response()->json([
+            'ok' => true,
+            'resume_stream_url' => $out['resume_stream_url'],
+            'already_executed' => $out['already_executed'],
+            'executed_this_request' => $out['executed_this_request'],
+            'run' => $runs->payload($run),
+        ]);
+    }
+
+    /**
+     * POST：拒绝挂起的工具调用（不执行写操作），并返回一次性拒绝续流 URL。
+     */
+    public function rejectToolApproval(
+        Request $request,
+        int $runId,
+        string $approvalId,
+        AdminAiOpsToolApprovalService $approvals,
+        AdminAiOpsRunService $runs,
+    ): JsonResponse {
+        $this->findOwnedRun($request, $runId);
+
+        $payload = $request->validate([
+            'reason' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        /** @var Admin $admin */
+        $admin = $request->user('admin');
+        $approval = $approvals->assertCanDecide($approvalId, (int) $admin->id);
+        $out = $approvals->rejectAndPrepareResume($approval, (int) $admin->id, $runId, $payload['reason'] ?? null);
+
+        Log::info('admin_ai_ops_tool_approval_reject_http', [
+            'run_id' => $runId,
+            'approval_id' => $approvalId,
+            'admin_id' => (int) $admin->id,
+        ]);
+
+        $run = AdminAiOpsRun::query()
+            ->whereKey($runId)
+            ->with(['steps', 'attachments', 'aiModel'])
+            ->firstOrFail();
+
+        return response()->json([
+            'ok' => true,
+            'reject_resume_stream_url' => $out['reject_resume_stream_url'],
+            'run' => $runs->payload($run),
+        ]);
+    }
+
+    /**
+     * SSE：在批准/拒绝后消费一次性 nonce，续跑第二轮模型输出并完成 run 终态。
+     */
+    public function resumeStream(
+        Request $request,
+        int $runId,
+        AdminAiOpsToolApprovalService $approvals,
+        AdminAiOpsRunService $runs,
+        AdminAiOpsChatService $chat,
+    ): StreamedResponse {
+        set_time_limit(300);
+        $this->findOwnedRun($request, $runId);
+
+        /** @var Admin $admin */
+        $admin = $request->user('admin');
+        $adminId = (int) $admin->id;
+
+        $nonce = trim((string) $request->query('nonce', ''));
+        $maxSeconds = (int) config('geoflow.admin_ai_ops_chat_stream_max_seconds', 900);
+
+        return response()->stream(function () use ($runId, $adminId, $nonce, $approvals, $runs, $chat, $maxSeconds): void {
+            $lock = Cache::lock('geoflow:admin_ai_ops_resume_stream:'.(int) $runId, $maxSeconds + 120);
+
+            try {
+                $lock->block($maxSeconds + 120);
+
+                $payload = $approvals->consumeResumeNonce($nonce);
+                if (! is_array($payload)
+                    || (int) ($payload['admin_id'] ?? 0) !== $adminId
+                    || (int) ($payload['run_id'] ?? 0) !== (int) $runId) {
+                    $this->writeAdminAiOpsSseJsonEvent('stream_error', ['message' => 'invalid_or_expired_nonce']);
+                    $this->writeAdminAiOpsSseDoneEvent();
+
+                    return;
+                }
+
+                $approvalId = (string) ($payload['approval_id'] ?? '');
+                $decision = (string) ($payload['decision'] ?? '');
+
+                $run = AdminAiOpsRun::query()
+                    ->where('admin_id', $adminId)
+                    ->whereKey($runId)
+                    ->with(['steps', 'attachments', 'aiModel'])
+                    ->first();
+
+                if (! $run instanceof AdminAiOpsRun) {
+                    $this->writeAdminAiOpsSseJsonEvent('stream_error', ['message' => 'not_found']);
+                    $this->writeAdminAiOpsSseDoneEvent();
+
+                    return;
+                }
+
+                $status = (string) $run->status;
+                if (in_array($status, ['completed', 'failed'], true)) {
+                    $this->writeAdminAiOpsSseRunEvent($runs->payload($run->fresh(['steps', 'attachments', 'aiModel']) ?? $run));
+                    $this->writeAdminAiOpsSseDoneEvent();
+
+                    return;
+                }
+
+                $approval = AdminAiOpsToolApproval::query()->whereKey($approvalId)->first();
+                if (! $approval instanceof AdminAiOpsToolApproval || (int) $approval->run_id !== (int) $runId) {
+                    $this->writeAdminAiOpsSseJsonEvent('stream_error', ['message' => 'approval_mismatch']);
+                    $this->writeAdminAiOpsSseDoneEvent();
+
+                    return;
+                }
+
+                if ($decision === 'approve' && $approval->status !== 'executed') {
+                    $this->writeAdminAiOpsSseJsonEvent('stream_error', ['message' => 'approval_not_executed']);
+                    $this->writeAdminAiOpsSseDoneEvent();
+
+                    return;
+                }
+
+                if ($decision === 'reject' && $approval->status !== 'rejected') {
+                    $this->writeAdminAiOpsSseJsonEvent('stream_error', ['message' => 'approval_not_rejected']);
+                    $this->writeAdminAiOpsSseDoneEvent();
+
+                    return;
+                }
+
+                $aiModel = $run->aiModel;
+                if (! $aiModel instanceof AiModel) {
+                    $run = $runs->updateRun($run->fresh() ?? $run, [
+                        'status' => 'failed',
+                        'error_message' => 'AI 模型不存在或已被删除。',
+                        'finished_at' => now(),
+                    ]);
+                    $this->writeAdminAiOpsSseRunEvent($runs->payload($run));
+                    $this->writeAdminAiOpsSseDoneEvent();
+
+                    return;
+                }
+
+                $priorMessages = $chat->priorMessagesBeforeRun((int) $run->session_id, (int) $run->id);
+                $providerUrl = OpenAiRuntimeProvider::resolveChatBaseUrl((string) ($aiModel->api_url ?? ''));
+                $deadline = microtime(true) + $maxSeconds;
+
+                app()->instance(AdminAiOpsStreamContext::class, new AdminAiOpsStreamContext((int) $run->id, $adminId));
+                try {
+                    if ($decision === 'approve') {
+                        $assistantText = $chat->streamAssistantResumeAfterApproval(
+                            $run,
+                            $priorMessages,
+                            $aiModel,
+                            function (string $accumulated) use ($deadline): void {
+                                if (microtime(true) > $deadline) {
+                                    throw new \RuntimeException('模型输出超过单连接时间上限，已中止。');
+                                }
+                                if (app()->bound(AdminAiOpsStreamContext::class)) {
+                                    app(AdminAiOpsStreamContext::class)->setPartialAssistantText($accumulated);
+                                }
+                                $this->writeAdminAiOpsSseJsonEvent('delta', ['text' => $accumulated]);
+                            },
+                            function (object $event): void {
+                                $this->emitAdminAiOpsSseFromAiStreamEvent($event);
+                            },
+                            null,
+                        );
+                    } else {
+                        $assistantText = $chat->streamAssistantResumeAfterReject(
+                            $run,
+                            $priorMessages,
+                            $aiModel,
+                            (string) $approval->tool_name,
+                            (string) ($approval->rejection_reason ?? ''),
+                            (string) $approval->args_fingerprint,
+                            function (string $accumulated) use ($deadline): void {
+                                if (microtime(true) > $deadline) {
+                                    throw new \RuntimeException('模型输出超过单连接时间上限，已中止。');
+                                }
+                                if (app()->bound(AdminAiOpsStreamContext::class)) {
+                                    app(AdminAiOpsStreamContext::class)->setPartialAssistantText($accumulated);
+                                }
+                                $this->writeAdminAiOpsSseJsonEvent('delta', ['text' => $accumulated]);
+                            },
+                            function (object $event): void {
+                                $this->emitAdminAiOpsSseFromAiStreamEvent($event);
+                            },
+                            null,
+                        );
+                    }
 
                     $assistantText = trim((string) $assistantText);
-
                     if ($assistantText === '') {
                         throw new \RuntimeException('模型返回为空');
                     }
 
-                    $run = $runs->updateRun($run->fresh() ?? $run, [
+                    $snapshotRun = $run->fresh() ?? $run;
+                    $mergedSummary = $this->mergeAiOpsPartialAssistantWithResumeSummary($snapshotRun, $assistantText);
+
+                    $run = $runs->updateRun($snapshotRun, [
                         'status' => 'completed',
-                        'result_summary' => $assistantText,
+                        'result_summary' => $mergedSummary,
                         'finished_at' => now(),
                     ]);
                 } catch (Throwable $e) {
@@ -249,6 +563,8 @@ class AdminAiOpsController extends Controller
                         'error_message' => $human !== '' ? $human : trim($e->getMessage()),
                         'finished_at' => now(),
                     ]);
+                } finally {
+                    app()->forgetInstance(AdminAiOpsStreamContext::class);
                 }
 
                 $this->writeAdminAiOpsSseRunEvent($runs->payload($run->fresh(['steps', 'attachments', 'aiModel']) ?? $run));
@@ -264,6 +580,27 @@ class AdminAiOpsController extends Controller
                 }
             }
         }, 200, $this->adminAiOpsSseResponseHeaders());
+    }
+
+    /**
+     * 将审批前已流式输出的助手片段与续跑正文合并为一条 result_summary，避免刷新后只剩后半段。
+     */
+    private function mergeAiOpsPartialAssistantWithResumeSummary(AdminAiOpsRun $run, string $resumeAssistantText): string
+    {
+        $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
+        $partial = trim((string) ($snapshot['partial_assistant_text'] ?? ''));
+        $resume = trim($resumeAssistantText);
+        if ($partial === '') {
+            return $resume;
+        }
+        if ($resume === '') {
+            return $partial;
+        }
+        if (str_starts_with($resume, $partial)) {
+            return $resume;
+        }
+
+        return $partial."\n\n".$resume;
     }
 
     /**
@@ -387,6 +724,31 @@ class AdminAiOpsController extends Controller
     }
 
     /**
+     * 高风险工具在真正执行前挂起审批：Laravel AI 不会对该次调用再发 ToolResult，前端会一直处于「调用中」。
+     * 这里按最近一次 ToolCall 的 id 补发一条 tool/done，与正常工具返回的 SSE 形态一致。
+     */
+    private function emitAdminAiOpsSseSyntheticToolDoneForPendingApproval(AdminAiOpsToolApprovalPendingException $e): void
+    {
+        if (! app()->bound(AdminAiOpsStreamContext::class)) {
+            return;
+        }
+
+        $lastId = trim((string) app(AdminAiOpsStreamContext::class)->lastToolCallId);
+        if ($lastId === '') {
+            return;
+        }
+
+        $this->writeAdminAiOpsSseJsonEvent('tool', [
+            'phase' => 'done',
+            'tool_call_id' => $lastId,
+            'tool_name' => $e->toolName,
+            'successful' => true,
+            'error' => '',
+            'result_preview' => (string) __('admin.ai_ops.tool_pending_approval_result_preview'),
+        ]);
+    }
+
+    /**
      * 将 Laravel AI 流中的非文本事件映射为前端可展示的 SSE（连接、工具调用与结果）。
      */
     private function emitAdminAiOpsSseFromAiStreamEvent(object $event): void
@@ -402,6 +764,9 @@ class AdminAiOpsController extends Controller
         }
 
         if ($event instanceof AiStreamToolCall) {
+            if (app()->bound(AdminAiOpsStreamContext::class)) {
+                app(AdminAiOpsStreamContext::class)->lastToolCallId = (string) $event->toolCall->id;
+            }
             $this->writeAdminAiOpsSseJsonEvent('tool', [
                 'phase' => 'calling',
                 'tool_call_id' => $event->toolCall->id,
@@ -419,8 +784,46 @@ class AdminAiOpsController extends Controller
                 'tool_name' => $event->toolResult->name,
                 'successful' => $event->successful,
                 'error' => $event->error,
+                'result_preview' => $this->adminAiOpsSseToolResultDataPreview($event->toolResult->result),
             ]);
+            $this->writeAdminAiOpsSseJsonEvent('stream_status', [
+                'kind' => 'post_tool_model_round',
+                'tool_name' => $event->toolResult->name,
+                'successful' => $event->successful,
+            ]);
+
+            return;
         }
+    }
+
+    /**
+     * 将工具返回体截断为适合 SSE 的纯文本预览（避免整页 JSON 撑爆前端）。
+     */
+    private function adminAiOpsSseToolResultDataPreview(mixed $result): ?string
+    {
+        if ($result === null) {
+            return null;
+        }
+
+        if (is_string($result)) {
+            $text = $result;
+        } else {
+            $encoded = json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+
+            $text = $encoded !== false ? $encoded : '';
+        }
+
+        $text = trim($text);
+        if ($text === '') {
+            return null;
+        }
+
+        $maxBytes = 2400;
+        if (strlen($text) <= $maxBytes) {
+            return $text;
+        }
+
+        return substr($text, 0, $maxBytes).'…';
     }
 
     /**

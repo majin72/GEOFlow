@@ -5,6 +5,8 @@ namespace App\Services\Admin\AiOps;
 use App\Events\Admin\AdminAiOpsRunUpdated;
 use App\Models\AdminAiOpsRun;
 use App\Models\AdminAiOpsStep;
+use App\Models\AdminAiOpsToolApproval;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -122,6 +124,33 @@ class AdminAiOpsRunService
             ];
         }
 
+        $approvalPending = null;
+        $assistantPartialPreview = null;
+        if ((string) $run->status === 'awaiting_confirmation') {
+            $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
+            $partial = trim((string) ($snapshot['partial_assistant_text'] ?? ''));
+            if ($partial !== '') {
+                $assistantPartialPreview = Str::limit($partial, 8000, '…');
+            }
+
+            $pendingRow = AdminAiOpsToolApproval::query()
+                ->where('run_id', (int) $run->id)
+                ->where('status', 'pending')
+                ->orderByDesc('id')
+                ->first();
+
+            if ($pendingRow instanceof AdminAiOpsToolApproval) {
+                $approvalPending = [
+                    'id' => (string) $pendingRow->id,
+                    'tool_name' => (string) $pendingRow->tool_name,
+                    'summary' => $this->approvalSummaryLine($pendingRow),
+                    'expires_at' => $pendingRow->expires_at?->toIso8601String(),
+                    'risk_label' => $pendingRow->risk_label ? (string) $pendingRow->risk_label : null,
+                    'args_fingerprint' => (string) $pendingRow->args_fingerprint,
+                ];
+            }
+        }
+
         return [
             'id' => (int) $run->id,
             'session_id' => (int) $run->session_id,
@@ -133,6 +162,8 @@ class AdminAiOpsRunService
             'result_summary' => (string) ($run->result_summary ?? ''),
             'error_message' => (string) ($run->error_message ?? ''),
             'can_cancel' => in_array((string) $run->status, ['queued', 'processing'], true),
+            'approval_pending' => $approvalPending,
+            'assistant_partial_preview' => $assistantPartialPreview,
             'steps' => $run->steps->map(fn (AdminAiOpsStep $step): array => [
                 'id' => (int) $step->id,
                 'position' => (int) $step->position,
@@ -188,5 +219,19 @@ class AdminAiOpsRunService
         $decoded = json_decode($this->redact($encoded), true);
 
         return is_array($decoded) ? $decoded : $payload;
+    }
+
+    /**
+     * 供前端 Modal 展示的一行审批摘要（不含敏感参数原文）。
+     */
+    private function approvalSummaryLine(AdminAiOpsToolApproval $row): string
+    {
+        $chunks = ['需确认的写操作'];
+        if (trim((string) ($row->risk_label ?? '')) !== '') {
+            $chunks[] = trim((string) $row->risk_label);
+        }
+        $chunks[] = (string) $row->tool_name;
+
+        return Str::limit(implode(' · ', array_filter($chunks)), 220, '…');
     }
 }

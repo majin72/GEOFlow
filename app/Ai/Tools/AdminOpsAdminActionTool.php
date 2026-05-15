@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Ai\Tools;
 
 use App\Services\Admin\AdminOps\AdminOpsAdminActionService;
+use App\Services\Admin\AiOps\AdminAiOpsToolApprovalService;
+use App\Services\Admin\AiOps\AdminAiOpsToolRiskEvaluator;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Support\Arr;
 use Laravel\Ai\Contracts\Tool;
@@ -19,6 +21,8 @@ final class AdminOpsAdminActionTool implements Tool
 {
     public function __construct(
         private readonly AdminOpsAdminActionService $actions,
+        private readonly AdminAiOpsToolRiskEvaluator $aiOpsRisk,
+        private readonly AdminAiOpsToolApprovalService $aiOpsApprovals,
     ) {}
 
     /**
@@ -29,7 +33,7 @@ final class AdminOpsAdminActionTool implements Tool
         return <<<'DESC'
 统一后台「除超管敏感项外」的读写入口。参数：kind=read|write；op=操作名；payload_json=JSON 对象字符串（可 {}）。
 read 常用 op：dashboard_summary, materials_stats, legacy_ai_configurator, sensitive_words_list, tasks_overview, tasks_form_options, task_detail(task_id), categories_list, articles_list(filters...), article_detail(article_id,only_trashed?), authors_list(search,page), author_detail(author_id), keyword_libraries_list, keyword_library_detail(library_id,search,page), title_libraries_list, title_library_detail(library_id,page), image_libraries_list, image_library_detail(library_id,page), knowledge_bases_list, knowledge_base_detail(knowledge_base_id), url_import_index_stats, url_import_job_show(job_id), url_import_history(page), url_import_status(job_id), ai_models_list, ai_prompts_list, ai_special_prompts_read。
-write 常用 op：sensitive_words_add(words 多行文本), sensitive_words_delete(word_id)；category_create|category_update|category_delete；author_create|author_update|author_delete；task_toggle(task_id,current_status)|task_delete|task_batch_start_stop(task_id,action=start|stop)|task_create|task_update(task_id,payload)；articles_batch_status(article_ids,new_status)|articles_batch_review|articles_batch_soft_delete|articles_batch_restore|articles_batch_force_delete|articles_trash_empty|article_restore|article_force_delete|article_create|article_update(article_id,payload)；keyword_library_*|keyword_add|keyword_delete_batch|keyword_import；title_library_*|title_add|title_delete_batch|title_library_ai_generate(library_id,payload)；image_library_*|image_delete_batch；knowledge_base_*；url_import_create(payload)|url_import_run(job_id)|url_import_commit(job_id)；ai_model_create|ai_model_update|ai_model_delete|ai_model_test；ai_prompt_create|ai_prompt_update|ai_prompt_delete；ai_special_prompt_keyword|ai_special_prompt_description(content)。图片/知识库文件上传为 multipart，仅能通过后台页面上传。
+write 常用 op：sensitive_words_add(words 多行文本), sensitive_words_delete(word_id)；category_create；category_update(category_id 或 id，二者与 slug、category_name 均可用于定位；字段可放在 payload 内；body 须含 name/description/sort_order 等)；category_delete(同上定位)；author_create|author_update|author_delete；task_toggle(task_id,current_status)|task_delete|task_batch_start_stop(task_id,action=start|stop)|task_create|task_update(task_id,payload)；articles_batch_status(article_ids,new_status)|articles_batch_review|articles_batch_soft_delete|articles_batch_restore|articles_batch_force_delete|articles_trash_empty|article_restore|article_force_delete|article_create|article_update(article_id,payload)；keyword_library_*|keyword_add|keyword_delete_batch|keyword_import；title_library_*|title_add|title_delete_batch|title_library_ai_generate(library_id,payload)；image_library_*|image_delete_batch；knowledge_base_*；url_import_create(payload)|url_import_run(job_id)|url_import_commit(job_id)；ai_model_create|ai_model_update|ai_model_delete|ai_model_test；ai_prompt_create|ai_prompt_update|ai_prompt_delete；ai_special_prompt_keyword|ai_special_prompt_description(content)。图片/知识库文件上传为 multipart，仅能通过后台页面上传。
 DESC;
     }
 
@@ -50,6 +54,19 @@ DESC;
 
         if (! is_array($payload)) {
             return json_encode(['ok' => false, 'error' => 'payload_json 必须为 JSON 对象。'], JSON_UNESCAPED_UNICODE) ?: '{}';
+        }
+
+        $risk = $this->aiOpsRisk->evaluate('AdminOpsAdminActionTool', [
+            'kind' => $kind,
+            'op' => $op,
+            'payload' => $payload,
+        ]);
+        if ($risk !== null) {
+            $this->aiOpsApprovals->createPendingAndThrow('AdminOpsAdminActionTool', [
+                'kind' => $kind,
+                'op' => $op,
+                'payload' => $payload,
+            ], $risk);
         }
 
         try {

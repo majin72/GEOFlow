@@ -87,4 +87,10 @@ return [
     // 单连接最长秒数（防止 PHP-FPM 被长时间占用；若代理提前断开可调大代理读超时或本值）。
     'admin_ai_ops_chat_stream_max_seconds' => max(120, min(7200, (int) env('GEOFLOW_ADMIN_AI_OPS_CHAT_STREAM_MAX_SECONDS', 900))),
 
+    // AI 运维高风险工具审批（挂起 → SSE approval_required → POST 批准/拒绝 → resume-stream 续跑模型）
+    'admin_ai_ops_tool_approval' => [
+        'enabled' => filter_var(env('GEOFLOW_ADMIN_AI_OPS_TOOL_APPROVAL_ENABLED', true), FILTER_VALIDATE_BOOLEAN),
+        'ttl_seconds' => max(60, min(86400, (int) env('GEOFLOW_ADMIN_AI_OPS_TOOL_APPROVAL_TTL_SECONDS', 900))),
+    ],
+
 ];

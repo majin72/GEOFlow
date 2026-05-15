@@ -15,6 +15,7 @@ use App\Ai\Tools\AdminOpsSiteSetActiveThemeTool;
 use App\Ai\Tools\AdminOpsSiteSetArticleAdsTool;
 use App\Ai\Tools\TavilyWebSearchTool;
 use App\Models\AdminAiOpsRun;
+use App\Models\AdminAiOpsToolApproval;
 use App\Models\AiModel;
 use App\Support\GeoFlow\ApiKeyCrypto;
 use App\Support\GeoFlow\OpenAiRuntimeProvider;
@@ -120,6 +121,133 @@ class AdminAiOpsChatService
         ?Closure $onRawModelStreamEvent = null,
         ?Closure $onLlmStreamFinished = null,
     ): string {
+        return $this->streamAssistantWithPriorAgent(
+            currentUserMessage: $currentUserMessage,
+            priorConversationMessages: $priorConversationMessages,
+            aiModel: $aiModel,
+            onTextAccumulated: $onTextAccumulated,
+            onRawModelStreamEvent: $onRawModelStreamEvent,
+            onLlmStreamFinished: $onLlmStreamFinished,
+        );
+    }
+
+    /**
+     * 用户批准并已执行工具后：基于历史会话 + 合成 user 块（含 partial 与工具输出）续跑模型流。
+     *
+     * @param  array<int, Message>  $priorConversationMessages
+     * @param  Closure(string): void  $onTextAccumulated
+     * @param  (Closure(object): void)|null  $onRawModelStreamEvent
+     * @param  (Closure(array<string, mixed>): void)|null  $onLlmStreamFinished
+     */
+    public function streamAssistantResumeAfterApproval(
+        AdminAiOpsRun $run,
+        array $priorConversationMessages,
+        AiModel $aiModel,
+        Closure $onTextAccumulated,
+        ?Closure $onRawModelStreamEvent = null,
+        ?Closure $onLlmStreamFinished = null,
+    ): string {
+        $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
+        $partial = trim((string) ($snapshot['partial_assistant_text'] ?? ''));
+        $toolOutput = trim((string) ($snapshot['tool_output_text'] ?? ''));
+        if ($toolOutput === '') {
+            $executed = AdminAiOpsToolApproval::query()
+                ->where('run_id', (int) $run->id)
+                ->where('status', 'executed')
+                ->orderByDesc('id')
+                ->first();
+            if ($executed instanceof AdminAiOpsToolApproval) {
+                $toolOutput = trim((string) ($executed->executed_output ?? ''));
+            }
+        }
+
+        $toolName = 'AdminOpsAdminActionTool';
+        $executedRow = AdminAiOpsToolApproval::query()
+            ->where('run_id', (int) $run->id)
+            ->where('status', 'executed')
+            ->orderByDesc('id')
+            ->first();
+        if ($executedRow instanceof AdminAiOpsToolApproval) {
+            $toolName = (string) $executedRow->tool_name;
+        }
+
+        $synthesis = $this->buildResumeSynthesisBlockApprove(
+            partialAssistantText: $partial,
+            toolOutputText: $toolOutput,
+            toolName: $toolName,
+        );
+
+        $mergedPrior = array_merge($priorConversationMessages, [
+            new Message(MessageRole::User, $synthesis),
+        ]);
+
+        return $this->streamAssistantWithPriorAgent(
+            currentUserMessage: '请基于上文（含已批准工具输出）用简体中文给出最终答复。',
+            priorConversationMessages: $mergedPrior,
+            aiModel: $aiModel,
+            onTextAccumulated: $onTextAccumulated,
+            onRawModelStreamEvent: $onRawModelStreamEvent,
+            onLlmStreamFinished: $onLlmStreamFinished,
+        );
+    }
+
+    /**
+     * 用户拒绝工具后：合成等价于 tool_result(is_error=true) 的 user 块并续跑模型流。
+     *
+     * @param  array<int, Message>  $priorConversationMessages
+     * @param  Closure(string): void  $onTextAccumulated
+     * @param  (Closure(object): void)|null  $onRawModelStreamEvent
+     * @param  (Closure(array<string, mixed>): void)|null  $onLlmStreamFinished
+     */
+    public function streamAssistantResumeAfterReject(
+        AdminAiOpsRun $run,
+        array $priorConversationMessages,
+        AiModel $aiModel,
+        string $toolName,
+        string $rejectReason,
+        string $argsFingerprint,
+        Closure $onTextAccumulated,
+        ?Closure $onRawModelStreamEvent = null,
+        ?Closure $onLlmStreamFinished = null,
+    ): string {
+        $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
+        $partial = trim((string) ($snapshot['partial_assistant_text'] ?? ''));
+        $reason = trim($rejectReason) !== '' ? trim($rejectReason) : 'denied by user approval prompt';
+
+        $synthesis = $this->buildResumeSynthesisBlockReject(
+            partialAssistantText: $partial,
+            toolName: $toolName,
+            rejectReason: $reason,
+            argsFingerprint: $argsFingerprint,
+        );
+
+        $mergedPrior = array_merge($priorConversationMessages, [
+            new Message(MessageRole::User, $synthesis),
+        ]);
+
+        return $this->streamAssistantWithPriorAgent(
+            currentUserMessage: '请基于上文（工具被拒绝）用简体中文给出最终答复，不要假装已执行写操作。',
+            priorConversationMessages: $mergedPrior,
+            aiModel: $aiModel,
+            onTextAccumulated: $onTextAccumulated,
+            onRawModelStreamEvent: $onRawModelStreamEvent,
+            onLlmStreamFinished: $onLlmStreamFinished,
+        );
+    }
+
+    /**
+     * 使用自定义 prior 消息列表发起一次流式对话（与 {@see streamAssistantReply} 共享 Provider 注册逻辑）。
+     *
+     * @param  array<int, Message>  $priorConversationMessages
+     */
+    private function streamAssistantWithPriorAgent(
+        string $currentUserMessage,
+        array $priorConversationMessages,
+        AiModel $aiModel,
+        Closure $onTextAccumulated,
+        ?Closure $onRawModelStreamEvent,
+        ?Closure $onLlmStreamFinished,
+    ): string {
         $providerUrl = OpenAiRuntimeProvider::resolveChatBaseUrl((string) ($aiModel->api_url ?? ''));
         $apiKey = $this->apiKeyCrypto->decrypt((string) ($aiModel->getRawOriginal('api_key') ?? ''));
         $modelId = trim((string) ($aiModel->model_id ?? ''));
@@ -160,7 +288,10 @@ class AdminAiOpsChatService
             }
         }
 
-        $final = trim((string) ($stream->text ?? $manual));
+        $fromStream = trim((string) ($stream->text ?? ''));
+        $fromManual = trim((string) $manual);
+        // 部分 Provider 在工具轮次后仅填充较短的 stream->text；始终以手工累积的更长正文为准，避免落库/历史丢失前半段。
+        $final = mb_strlen($fromManual) > mb_strlen($fromStream) ? $fromManual : ($fromStream !== '' ? $fromStream : $fromManual);
 
         if ($onLlmStreamFinished instanceof Closure) {
             $onLlmStreamFinished([
@@ -173,6 +304,70 @@ class AdminAiOpsChatService
         }
 
         return $final;
+    }
+
+    /**
+     * 构造「批准 + 工具输出」续跑用的合成 user 文本块（控制总长度）。
+     */
+    private function buildResumeSynthesisBlockApprove(string $partialAssistantText, string $toolOutputText, string $toolName): string
+    {
+        $budget = self::PRIOR_CONVERSATION_CHAR_BUDGET;
+        $half = max(1000, (int) floor($budget / 2));
+        $partialT = $this->truncateForResumeBudget('中断前助手片段', $partialAssistantText, $half);
+        $remaining = max(500, $budget - mb_strlen($partialT));
+        $toolT = $this->truncateForResumeBudget('工具输出', $toolOutputText, $remaining);
+
+        return <<<TXT
+【续跑上下文 / 非最终答案】
+以下「中断前助手已输出片段」来自首轮 SSE，可能不完整，请勿将其视为最终结论：
+---
+{$partialT}
+---
+管理员已批准执行工具「{$toolName}」。工具返回（通常为 JSON 文本）如下：
+---
+{$toolT}
+---
+请用简体中文基于工具真实输出给出最终答复；若工具返回 ok:false，请如实说明原因与后续建议。
+TXT;
+    }
+
+    /**
+     * 构造「拒绝工具」续跑用的合成 user 文本块（语义对齐 tool_result is_error=true）。
+     */
+    private function buildResumeSynthesisBlockReject(string $partialAssistantText, string $toolName, string $rejectReason, string $argsFingerprint): string
+    {
+        $budget = self::PRIOR_CONVERSATION_CHAR_BUDGET;
+        $partialT = $this->truncateForResumeBudget('中断前助手片段', $partialAssistantText, (int) floor($budget * 0.45));
+
+        $meta = '工具：'.$toolName."\n".'拒绝原因：'.$rejectReason."\n".'参数指纹：'.$argsFingerprint;
+
+        return <<<TXT
+【等价于 tool_result（is_error=true）】
+{$meta}
+
+以下为首轮流式输出片段（可能不完整）：
+---
+{$partialT}
+---
+
+请用简体中文说明：用户已拒绝该工具调用，你不得假装写操作已成功；尊重用户选择并给出安全、可执行的替代建议（控制在合理长度内）。
+TXT;
+    }
+
+    /**
+     * 将文本截断到指定字符预算并追加提示。
+     */
+    private function truncateForResumeBudget(string $label, string $text, int $maxChars): string
+    {
+        $text = trim($text);
+        if ($text === '') {
+            return '（空）';
+        }
+        if (mb_strlen($text) <= $maxChars) {
+            return $text;
+        }
+
+        return mb_substr($text, 0, max(1, $maxChars - 12))."\n…（{$label} 已截断）";
     }
 
     /**

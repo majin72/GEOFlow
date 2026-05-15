@@ -28,6 +28,7 @@ class AdminAiOpsRun extends Model
     {
         return [
             'plan' => 'array',
+            'plan_stream_snapshot' => 'array',
             'ai_model_id' => 'integer',
             'confirmed_at' => 'datetime',
             'cancel_requested_at' => 'datetime',
@@ -59,5 +60,13 @@ class AdminAiOpsRun extends Model
     public function attachments(): HasMany
     {
         return $this->hasMany(AdminAiOpsAttachment::class, 'run_id');
+    }
+
+    /**
+     * 工具调用审批记录（高风险写操作挂起）。
+     */
+    public function toolApprovals(): HasMany
+    {
+        return $this->hasMany(AdminAiOpsToolApproval::class, 'run_id');
     }
 }

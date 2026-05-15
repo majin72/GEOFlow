@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Ai\Tools;
 
 use App\Services\Admin\AdminOps\AdminOpsSiteWriteService;
+use App\Services\Admin\AiOps\AdminAiOpsToolApprovalService;
+use App\Services\Admin\AiOps\AdminAiOpsToolRiskEvaluator;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Support\Arr;
 use Laravel\Ai\Contracts\Tool;
@@ -19,6 +21,8 @@ final class AdminOpsSitePatchBasicsTool implements Tool
 {
     public function __construct(
         private readonly AdminOpsSiteWriteService $siteWrite,
+        private readonly AdminAiOpsToolRiskEvaluator $aiOpsRisk,
+        private readonly AdminAiOpsToolApprovalService $aiOpsApprovals,
     ) {}
 
     /**
@@ -47,6 +51,15 @@ final class AdminOpsSitePatchBasicsTool implements Tool
 
         if (! is_array($decoded)) {
             return json_encode(['ok' => false, 'error' => 'patch_json 必须解析为 JSON 对象。'], JSON_UNESCAPED_UNICODE) ?: '{}';
+        }
+
+        $risk = $this->aiOpsRisk->evaluate('AdminOpsSitePatchBasicsTool', [
+            'patch' => $decoded,
+        ]);
+        if ($risk !== null) {
+            $this->aiOpsApprovals->createPendingAndThrow('AdminOpsSitePatchBasicsTool', [
+                'patch' => $decoded,
+            ], $risk);
         }
 
         $result = $this->siteWrite->patchBasics($decoded);
