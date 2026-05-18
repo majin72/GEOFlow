@@ -1440,7 +1440,7 @@ return [
         'pagination_summary' => 'Showing :from - :to of :total',
         'modal_upload' => 'Upload Images To :name',
         'upload_hint' => 'Drag images here or click to choose files',
-        'upload_formats' => 'Supports JPEG, PNG, GIF, and WebP',
+        'upload_formats' => 'Supports JPEG, PNG, GIF, WebP, AVIF, and BMP; max 10MB per file',
         'select_images' => 'Choose Images',
         'selected_files' => 'Selected Files:',
         'modal_edit' => 'Edit Image Library',

@@ -19,6 +19,13 @@
     if ($urlLabel === 'admin.image_detail.url_label') {
         $urlLabel = 'URL';
     }
+    $hasImageUploadError = false;
+    foreach (array_keys($errors->messages()) as $errorKey) {
+        if (str_starts_with((string) $errorKey, 'images')) {
+            $hasImageUploadError = true;
+            break;
+        }
+    }
 @endphp
 
 @section('content')
@@ -538,5 +545,11 @@
                 hideImageModal();
             }
         };
+
+        @if ($hasImageUploadError)
+        document.addEventListener('DOMContentLoaded', function () {
+            showUploadModal();
+        });
+        @endif
     </script>
 @endpush

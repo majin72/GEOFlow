@@ -72,9 +72,11 @@
                                 <h3 class="text-lg font-medium text-gray-900">{{ __($i18nRoot.'.section.content_title') }}</h3>
                                 <div class="flex items-center space-x-2">
                                     <span class="text-sm text-gray-500">{{ __($i18nRoot.'.help.markdown_supported') }}</span>
-                                    <button type="button" onclick="togglePreview()" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50">
+                                    <button type="button" onclick="toggleArticlePreview()" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50">
                                         <i data-lucide="eye" class="w-4 h-4 mr-1"></i>
-                                        <span id="preview-toggle-text">{{ __($i18nRoot.'.button.show_preview') }}</span>
+                                        <span id="preview-toggle-text"
+                                            data-label-show="{{ __($i18nRoot.'.button.show_preview') }}"
+                                            data-label-hide="{{ __($i18nRoot.'.button.hide_preview') }}">{{ __($i18nRoot.'.button.show_preview') }}</span>
                                     </button>
                                 </div>
                             </div>
@@ -206,7 +208,6 @@
 @endsection
 
 @push('styles')
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         .editor-textarea {
             resize: vertical;
@@ -247,40 +248,5 @@
 @endpush
 
 @push('scripts')
-    <script>
-        let previewVisible = false;
-
-        function renderPreview() {
-            const source = document.getElementById('content-textarea');
-            const target = document.getElementById('content-preview');
-            if (!source || !target || typeof marked === 'undefined') {
-                return;
-            }
-            target.innerHTML = marked.parse(source.value || '');
-        }
-
-        function togglePreview() {
-            const textarea = document.getElementById('content-textarea');
-            const panel = document.getElementById('content-preview-panel');
-            const toggleText = document.getElementById('preview-toggle-text');
-
-            if (!textarea || !panel || !toggleText) {
-                return;
-            }
-
-            previewVisible = !previewVisible;
-            if (previewVisible) {
-                renderPreview();
-                textarea.classList.add('hidden');
-                panel.classList.remove('hidden');
-                panel.setAttribute('aria-hidden', 'false');
-                toggleText.textContent = @json(__($i18nRoot.'.button.hide_preview'));
-            } else {
-                textarea.classList.remove('hidden');
-                panel.classList.add('hidden');
-                panel.setAttribute('aria-hidden', 'true');
-                toggleText.textContent = @json(__($i18nRoot.'.button.show_preview'));
-            }
-        }
-    </script>
+    @vite(['resources/js/admin-article-preview.js'])
 @endpush

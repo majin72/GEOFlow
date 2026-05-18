@@ -1,0 +1,35 @@
+name: laravel-architecture-guardian
+version: 1
+summary: Prevent messy Laravel PHP implementations by enforcing architecture boundaries, PHPDoc, tests, and quality gates.
+triggers:
+  - writing Laravel PHP backend code
+  - reviewing Laravel PHP backend code
+  - refactoring controllers, services, actions, jobs, models, requests, policies, or AI tools
+  - preventing overgrown methods, vague services, hidden dependencies, or untested business logic
+inputs:
+  required:
+    - user_request
+    - target_files_or_feature
+  optional:
+    - existing_patterns
+    - risk_level
+    - test_command
+outputs:
+  - architecture_decision
+  - implementation_plan
+  - code_changes_or_review_findings
+  - verification_result
+quality_gates:
+  - read nearby code before editing
+  - choose one owning layer for the change
+  - keep controllers thin and dependencies explicit
+  - add PHPDoc to every new PHP function or method
+  - test risky behavior or state why it cannot be tested now
+  - reject mixed-responsibility methods before finalizing
+companion_skills:
+  - laravel-best-practices
+  - ai-sdk-development
+exclusions:
+  - generic PHP style advice outside Laravel projects
+  - frontend-only Blade or Tailwind visual design work
+  - AI SDK syntax lookup without Laravel architecture decisions

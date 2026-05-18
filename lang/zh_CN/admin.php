@@ -1440,7 +1440,7 @@ return [
         'pagination_summary' => '显示第 :from - :to 张，共 :total 张',
         'modal_upload' => '上传图片到 :name',
         'upload_hint' => '拖拽图片到这里或点击选择',
-        'upload_formats' => '支持 JPEG、PNG、GIF、WebP 格式',
+        'upload_formats' => '支持 JPEG、PNG、GIF、WebP、AVIF、BMP；单张不超过 10MB',
         'select_images' => '选择图片',
         'selected_files' => '选中的文件：',
         'modal_edit' => '编辑图片库信息',

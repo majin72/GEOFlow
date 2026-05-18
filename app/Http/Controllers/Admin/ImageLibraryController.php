@@ -89,6 +89,9 @@ class ImageLibraryController extends Controller
 
     /**
      * 上传多张图片到指定图片库。
+     *
+     * 说明：Web 表单提交后使用 PRG（成功时 302 到详情、校验失败时 302 回到上一页），
+     * 浏览器 Network 里看到 302 是预期行为；若 Location 指向登录页，则为会话失效。
      */
     public function uploadImages(Request $request, int $libraryId): RedirectResponse
     {
@@ -98,7 +101,7 @@ class ImageLibraryController extends Controller
             'images' => ['required', 'array', 'min:1'],
             'images.*' => [
                 'required',
-                File::types(['jpg', 'jpeg', 'png', 'gif', 'webp'])->max(10 * 1024),
+                File::types(['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp'])->max(10 * 1024),
             ],
         ], [
             'images.required' => __('admin.image_detail.error.select_images'),

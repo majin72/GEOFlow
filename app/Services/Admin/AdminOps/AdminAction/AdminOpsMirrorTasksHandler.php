@@ -307,14 +307,10 @@ final class AdminOpsMirrorTasksHandler
         if ($categoryMode === 'random') {
             $categoryMode = 'smart';
         }
-        $needReview = filter_var($p['need_review'] ?? false, FILTER_VALIDATE_BOOLEAN)
-            || $p['need_review'] === '1' || $p['need_review'] === 1;
-        $isLoop = filter_var($p['is_loop'] ?? false, FILTER_VALIDATE_BOOLEAN)
-            || $p['is_loop'] === '1' || $p['is_loop'] === 1;
-        $autoKeywords = filter_var($p['auto_keywords'] ?? false, FILTER_VALIDATE_BOOLEAN)
-            || $p['auto_keywords'] === '1' || $p['auto_keywords'] === 1;
-        $autoDescription = filter_var($p['auto_description'] ?? false, FILTER_VALIDATE_BOOLEAN)
-            || $p['auto_description'] === '1' || $p['auto_description'] === 1;
+        $needReview = $this->parseOptionalFlag($p, 'need_review', false);
+        $isLoop = $this->parseOptionalFlag($p, 'is_loop', true);
+        $autoKeywords = $this->parseOptionalFlag($p, 'auto_keywords', true);
+        $autoDescription = $this->parseOptionalFlag($p, 'auto_description', true);
 
         return [
             'name' => (string) $p['task_name'],
@@ -337,5 +333,23 @@ final class AdminOpsMirrorTasksHandler
             'auto_keywords' => $autoKeywords ? 1 : 0,
             'auto_description' => $autoDescription ? 1 : 0,
         ];
+    }
+
+    /**
+     * 解析 payload 中可选布尔字段（未传时用 $defaultWhenMissing，与后台创建页默认勾选一致）。
+     *
+     * @param  array<string, mixed>  $validated
+     */
+    private function parseOptionalFlag(array $validated, string $key, bool $defaultWhenMissing): bool
+    {
+        if (! array_key_exists($key, $validated)) {
+            return $defaultWhenMissing;
+        }
+
+        $value = $validated[$key];
+
+        return filter_var($value, FILTER_VALIDATE_BOOLEAN)
+            || $value === '1'
+            || $value === 1;
     }
 }

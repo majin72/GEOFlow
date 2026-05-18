@@ -1,4 +1,5 @@
 # postgres 凭据由 DB_* 插值映射为官方镜像的 POSTGRES_*；redis 使用 REDIS_PASSWORD。推荐 docker compose --env-file .env.prod …
+# Linux 宿主机：挂载的 ./storage 须对容器内 PHP-FPM 用户可写（官方 php:fpm 常见为 www-data UID/GID 33）；勿长期 root:root 755，否则上传/日志/会话会失败。
 name: geoflow-laravel-prod
 
 # Vite 构建期注入的前端公开变量；任一 build 块使用 `args: *vite_build_args` 即可复用。

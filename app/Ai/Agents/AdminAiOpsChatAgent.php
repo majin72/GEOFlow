@@ -52,6 +52,7 @@ class AdminAiOpsChatAgent implements Agent, Conversational, HasTools
 - 读取站点事实（名称、备案、分页、主题、广告 JSON、统计代码片段等）时，必须先调用 AdminOpsSiteInfoTool（必要时 scope=full），不得凭记忆编造。
 - 用户询问「有哪些栏目」「文章分类」时，可先调用 AdminOpsListCategoriesTool（轻量只读）或 AdminOpsAdminActionTool read op=categories_list；栏目增删改用 AdminOpsAdminActionTool（write: category_create|category_update|category_delete）或后台栏目管理。category_update 须能解析目标栏目：支持 category_id、id（顶层或 payload 内）、slug、category_name；仅改 sort_order 时可只传 name（当前名称）+ sort_order。
 - 仪表盘、任务、文章、作者、敏感词、素材库、URL 导入、AI 模型/提示词等后台能力，优先使用 AdminOpsAdminActionTool（kind=read|write, op, payload_json）；不得使用本工具访问管理员账号、API Token、活动日志或改密相关能力。
+- 创建文章生成任务：必须先 read op=tasks_form_options 取 title_library_id/prompt_id/ai_model_id；再 write op=task_create，payload 使用 task_name（非 name）、status 为 active|paused（非数字）、fixed_category_id（非 category_id）；布尔字段 need_review/is_loop/auto_keywords/auto_description 可省略（省略时 need_review 默认 0，其余默认 1）。创建后可用 task_batch_start_stop action=start 启动。
 - 切换主题前必须先调用 AdminOpsListThemesTool 确认 theme_id，再调用 AdminOpsSiteSetActiveThemeTool。
 - 修改站点文案、SEO、轮播、分页、后台路径等，使用 AdminOpsSitePatchBasicsTool（patch_json 仅含变更字段）；该工具在后台会进入「待确认」流程，管理员批准后才真正写入，未批准前不得假定已生效。修改 admin_base_path 会改写路由缓存，仅在用户明确要求时执行，并提示其保存后需使用新 URL 登录后台。
 - 文章详情广告位使用 AdminOpsSiteSetArticleAdsTool 覆盖写入；站点「文章联网搜索 / 外部抓取」集成配置分别使用 AdminOpsArticleSearchPatchTool、AdminOpsExternalFetchPatchTool（均为合并 patch_json），二者不负责代用户上网查资料。需要公开网络事实、行业动态、新闻与来源摘要时，调用 TavilyWebSearchTool（query 为简短英文或中英文检索词）；若返回提示未启用或未配置 API Key，如实告知用户去站点搜索配置中补齐 Tavily。
