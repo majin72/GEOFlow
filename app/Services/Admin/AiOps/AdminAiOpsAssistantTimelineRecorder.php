@@ -2,6 +2,8 @@
 
 namespace App\Services\Admin\AiOps;
 
+use App\Support\AdminAiOpsUtf8;
+
 /**
  * 按 SSE 事件顺序记录助手输出：交替的 text 段与 tools 段（不靠正文下标插入）。
  */
@@ -70,7 +72,7 @@ final class AdminAiOpsAssistantTimelineRecorder
      */
     public function applyDelta(string $accumulatedText): void
     {
-        $t = (string) $accumulatedText;
+        $t = AdminAiOpsUtf8::sanitizeString((string) $accumulatedText);
 
         if ($this->textLocked) {
             if ($this->isStalePreToolDelta($t)) {
@@ -99,7 +101,12 @@ final class AdminAiOpsAssistantTimelineRecorder
             ];
         }
 
-        $this->appendToolToOpenSegment($toolCallId, $toolName, $argumentsPreview, 'calling');
+        $this->appendToolToOpenSegment(
+            $toolCallId,
+            $toolName,
+            AdminAiOpsUtf8::sanitizeString($argumentsPreview),
+            'calling',
+        );
     }
 
     /**
@@ -340,15 +347,15 @@ final class AdminAiOpsAssistantTimelineRecorder
                 }
                 $tool['phase'] = 'done';
                 $tool['successful'] = $successful;
-                $tool['error'] = $error;
+                $tool['error'] = AdminAiOpsUtf8::sanitizeString($error);
                 if ($resultPreview !== null && $resultPreview !== '') {
-                    $tool['resultPreview'] = $resultPreview;
+                    $tool['resultPreview'] = AdminAiOpsUtf8::sanitizeString($resultPreview);
                 }
                 if ($durationMs !== null) {
                     $tool['durationMs'] = $durationMs;
                 }
                 if ($rawOutput !== null && $rawOutput !== '') {
-                    $tool['rawOutput'] = $rawOutput;
+                    $tool['rawOutput'] = AdminAiOpsUtf8::sanitizeString($rawOutput);
                 }
 
                 return true;

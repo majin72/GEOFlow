@@ -14,6 +14,7 @@ use App\Services\Admin\AiOps\AdminAiOpsStreamContext;
 use App\Services\Admin\AiOps\AdminAiOpsToolApprovalService;
 use App\Services\Admin\AiOps\Exceptions\AdminAiOpsToolApprovalPendingException;
 use App\Services\GeoFlow\ArticleSearch\ArticleSearchConfig;
+use App\Support\AdminAiOpsUtf8;
 use App\Support\AdminWeb;
 use App\Support\GeoFlow\OpenAiRuntimeProvider;
 use Illuminate\Http\JsonResponse;
@@ -1027,7 +1028,7 @@ class AdminAiOpsController extends Controller
             $text = $encoded !== false ? $encoded : '';
         }
 
-        $text = trim($text);
+        $text = AdminAiOpsUtf8::sanitizeString(trim($text));
         if ($text === '') {
             return null;
         }
@@ -1037,7 +1038,7 @@ class AdminAiOpsController extends Controller
             return $text;
         }
 
-        return substr($text, 0, $maxBytes).'…';
+        return AdminAiOpsUtf8::sanitizeString(substr($text, 0, $maxBytes).'…');
     }
 
     /**
@@ -1062,12 +1063,13 @@ class AdminAiOpsController extends Controller
             return null;
         }
 
+        $raw = AdminAiOpsUtf8::sanitizeString($raw);
         $maxBytes = max(8192, (int) config('geoflow.admin_ai_ops_sse_raw_output_max_bytes', 65536));
         if (strlen($raw) <= $maxBytes) {
             return $raw;
         }
 
-        return substr($raw, 0, $maxBytes).'…';
+        return AdminAiOpsUtf8::sanitizeString(substr($raw, 0, $maxBytes).'…');
     }
 
     /**

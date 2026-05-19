@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Casts\Utf8SafeArrayCast;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -28,7 +29,7 @@ class AdminAiOpsRun extends Model
     {
         return [
             'plan' => 'array',
-            'plan_stream_snapshot' => 'array',
+            'plan_stream_snapshot' => Utf8SafeArrayCast::class,
             'ai_model_id' => 'integer',
             'confirmed_at' => 'datetime',
             'cancel_requested_at' => 'datetime',

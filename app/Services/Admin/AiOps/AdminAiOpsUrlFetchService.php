@@ -6,6 +6,7 @@ namespace App\Services\Admin\AiOps;
 
 use App\Exceptions\GeoFlow\ExternalFetchException;
 use App\Services\GeoFlow\ExternalFetch\ExternalFetchService;
+use App\Support\AdminAiOpsUtf8;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Http\Client\Response;
@@ -301,14 +302,14 @@ final class AdminAiOpsUrlFetchService
      */
     private function formatHttpResponse(string $url, string $method, Response $response, int $maxBytes): array
     {
-        $rawBody = (string) $response->body();
+        $contentTypeHeader = strtolower(trim((string) $response->header('Content-Type')));
+        $rawBody = $this->normalizeResponseBodyEncoding((string) $response->body(), $contentTypeHeader);
         $bodyLength = strlen($rawBody);
         if ($bodyLength > $maxBytes) {
             $rawBody = substr($rawBody, 0, $maxBytes);
         }
 
-        $contentType = strtolower(trim((string) $response->header('Content-Type')));
-        $contentType = explode(';', $contentType)[0] ?? $contentType;
+        $contentType = explode(';', $contentTypeHeader)[0] ?? $contentTypeHeader;
         $preview = $this->buildBodyPreview($rawBody, $contentType);
 
         return [
@@ -349,7 +350,27 @@ final class AdminAiOpsUrlFetchService
             $truncated = true;
         }
 
-        return ['text' => $body, 'truncated' => $truncated];
+        return ['text' => AdminAiOpsUtf8::sanitizeString($body), 'truncated' => $truncated];
+    }
+
+    /**
+     * 按 Content-Type charset 将响应体转为 UTF-8，并剔除非法字节。
+     */
+    private function normalizeResponseBodyEncoding(string $body, string $contentType): string
+    {
+        $charset = 'utf-8';
+        if (preg_match('/charset\s*=\s*["\']?([a-zA-Z0-9_\-]+)/i', $contentType, $matches) === 1) {
+            $charset = strtolower($matches[1]);
+        }
+
+        if (! in_array($charset, ['utf-8', 'utf8'], true)) {
+            $converted = @mb_convert_encoding($body, 'UTF-8', $charset);
+            if (is_string($converted) && $converted !== '') {
+                $body = $converted;
+            }
+        }
+
+        return AdminAiOpsUtf8::sanitizeString($body);
     }
 
     /**
