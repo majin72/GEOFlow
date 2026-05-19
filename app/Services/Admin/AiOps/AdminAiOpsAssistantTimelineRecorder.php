@@ -229,17 +229,6 @@ final class AdminAiOpsAssistantTimelineRecorder
         return $snap !== '' && str_starts_with($accumulated, $snap);
     }
 
-    private function archiveCurrentSegments(): void
-    {
-        if ($this->segments === []) {
-            return;
-        }
-        $this->completedRounds[] = ['segments' => $this->segments];
-        $this->segments = [];
-        $this->textLocked = false;
-        $this->preToolTextSnapshot = '';
-    }
-
     private function appendOrUpdateTrailingTextSegment(string $text, bool $afterTools = false): void
     {
         if ($afterTools) {

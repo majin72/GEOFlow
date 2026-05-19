@@ -143,7 +143,7 @@ class AdminAiOpsRunService
                 $approvalPending = [
                     'id' => (string) $pendingRow->id,
                     'tool_name' => (string) $pendingRow->tool_name,
-                    'tool_call_id' => trim((string) ($snapshot['last_tool_call_id'] ?? '')),
+                    'tool_call_id' => trim((string) ($pendingRow->tool_call_id ?? $snapshot['last_tool_call_id'] ?? '')),
                     'summary' => $this->approvalSummaryLine($pendingRow),
                     'expires_at' => $pendingRow->expires_at?->toIso8601String(),
                     'risk_label' => $pendingRow->risk_label ? (string) $pendingRow->risk_label : null,

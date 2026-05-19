@@ -117,6 +117,22 @@ final class AdminOpsSiteWriteService
     }
 
     /**
+     * 将模型常见别名规范为写入字段（site_title → site_name）。
+     *
+     * @param  array<string, mixed>  $patch
+     * @return array<string, mixed>
+     */
+    public function normalizeBasicsPatchKeys(array $patch): array
+    {
+        if (array_key_exists('site_title', $patch) && ! array_key_exists('site_name', $patch)) {
+            $patch['site_name'] = $patch['site_title'];
+        }
+        unset($patch['site_title']);
+
+        return $patch;
+    }
+
+    /**
      * 合并并保存「站点基础设置」中与后台表单一致的字段（部分字段可省略，省略则保持原值）。
      *
      * @param  array<string, mixed>  $patch
@@ -124,6 +140,7 @@ final class AdminOpsSiteWriteService
      */
     public function patchBasics(array $patch): array
     {
+        $patch = $this->normalizeBasicsPatchKeys($patch);
         $current = $this->loadBasicsForMerge();
         $merged = $current;
 

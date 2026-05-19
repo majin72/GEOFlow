@@ -395,8 +395,11 @@ class AdminAiOpsController extends Controller
 
         $approval->refresh();
         $executedPreview = null;
+        $executedOk = null;
         if ((string) $approval->status === 'executed') {
             $executedPreview = $this->adminAiOpsSseToolResultDataPreview((string) ($approval->executed_output ?? ''));
+            $decoded = json_decode((string) ($approval->executed_output ?? ''), true);
+            $executedOk = is_array($decoded) ? (bool) ($decoded['ok'] ?? true) : true;
         }
 
         return response()->json([
@@ -404,6 +407,7 @@ class AdminAiOpsController extends Controller
             'resume_stream_url' => $out['resume_stream_url'],
             'already_executed' => $out['already_executed'],
             'executed_this_request' => $out['executed_this_request'],
+            'executed_ok' => $executedOk,
             'executed_output_preview' => $executedPreview,
             'run' => $runs->payload($run),
         ]);
@@ -881,6 +885,11 @@ class AdminAiOpsController extends Controller
      */
     private function resolveAdminAiOpsApprovalToolCallId(AdminAiOpsToolApproval $approval): string
     {
+        $fromApproval = trim((string) ($approval->tool_call_id ?? ''));
+        if ($fromApproval !== '') {
+            return $fromApproval;
+        }
+
         if (app()->bound(AdminAiOpsStreamContext::class)) {
             $fromCtx = trim((string) app(AdminAiOpsStreamContext::class)->lastToolCallId);
             if ($fromCtx !== '') {
@@ -907,12 +916,12 @@ class AdminAiOpsController extends Controller
             return;
         }
 
-        $ctx = app(AdminAiOpsStreamContext::class);
-        $toolCallId = trim((string) $ctx->lastToolCallId);
+        $toolCallId = $this->resolveAdminAiOpsApprovalToolCallId($approval);
         if ($toolCallId === '') {
             return;
         }
 
+        $ctx = app(AdminAiOpsStreamContext::class);
         $reason = trim((string) ($approval->rejection_reason ?? ''));
         if ($reason === '') {
             $reason = (string) __('admin.ai_ops.tool_rejected_default_reason');

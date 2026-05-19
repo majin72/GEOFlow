@@ -625,29 +625,6 @@ const root = document.getElementById('admin-ai-ops-page');
         }
 
         /**
-         * 将上一轮 EventSource 缓冲转为续流用的 completedRounds 初始值。
-         *
-         * @param {object|null} prevLive
-         * @returns {Array<{ segments: Array<object> }>}
-         */
-        function buildCompletedRoundsFromPriorLive(prevLive) {
-            if (!prevLive || typeof prevLive !== 'object') {
-                return [];
-            }
-            const normalized = Array.isArray(prevLive.segments)
-                ? prevLive
-                : migrateLegacyLiveSnapshot(prevLive);
-            const out = [];
-            (normalized.completedRounds || []).forEach((round) => {
-                out.push({ segments: cloneTimelineSegments(round.segments) });
-            });
-            if ((normalized.segments || []).length) {
-                out.push({ segments: cloneTimelineSegments(normalized.segments) });
-            }
-            return out;
-        }
-
-        /**
          * 按 segments 顺序渲染：text → tools → text …
          *
          * @param {Array<object>} segments
@@ -1662,10 +1639,7 @@ const root = document.getElementById('admin-ai-ops-page');
                     const resolvedId = resolveApprovalToolCallId(liveAfter, rid, toolCallId, toolName);
                     if (resolvedId && res && (res.executed_this_request || res.already_executed)) {
                         const okPreview = res.executed_output_preview != null ? String(res.executed_output_preview) : '';
-                        let successful = true;
-                        if (okPreview.includes('"ok":false') || okPreview.includes('"ok": false')) {
-                            successful = false;
-                        }
+                        const successful = res.executed_ok !== false;
                         recordToolDoneToLive(liveAfter, {
                             phase: 'done',
                             tool_call_id: resolvedId,

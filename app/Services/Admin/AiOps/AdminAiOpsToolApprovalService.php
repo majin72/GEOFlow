@@ -70,6 +70,7 @@ class AdminAiOpsToolApprovalService
                 'run_id' => (int) $run->id,
                 'admin_id' => $ctx->adminId,
                 'tool_name' => $toolName,
+                'tool_call_id' => $lastToolCallId !== '' ? $lastToolCallId : null,
                 'arguments_json' => $encoded,
                 'args_fingerprint' => $fingerprint,
                 'risk_label' => Str::limit($riskLabel, 160, ''),
@@ -412,8 +413,6 @@ class AdminAiOpsToolApprovalService
             if (! is_array($patch)) {
                 return json_encode(['ok' => false, 'error' => 'patch 参数损坏。'], JSON_UNESCAPED_UNICODE) ?: '{}';
             }
-            $patch = $this->normalizeSitePatchKeys($patch);
-
             try {
                 $result = $this->siteWrite->patchBasics($patch);
             } catch (Throwable $e) {
@@ -539,21 +538,5 @@ class AdminAiOpsToolApprovalService
         if ((int) $approval->run_id !== $runId) {
             abort(404, '审批与执行轮次不匹配。');
         }
-    }
-
-    /**
-     * 将 site_title 规范为 site_name，避免审批执行时忽略标题字段。
-     *
-     * @param  array<string, mixed>  $patch
-     * @return array<string, mixed>
-     */
-    private function normalizeSitePatchKeys(array $patch): array
-    {
-        if (array_key_exists('site_title', $patch) && ! array_key_exists('site_name', $patch)) {
-            $patch['site_name'] = $patch['site_title'];
-        }
-        unset($patch['site_title']);
-
-        return $patch;
     }
 }

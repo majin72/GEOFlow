@@ -19,6 +19,7 @@ class AdminAiOpsToolApproval extends Model
         'run_id',
         'admin_id',
         'tool_name',
+        'tool_call_id',
         'arguments_json',
         'args_fingerprint',
         'risk_label',

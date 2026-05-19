@@ -210,6 +210,98 @@ class AdminAiOpsToolApprovalTest extends TestCase
         );
     }
 
+    public function test_approve_returns_executed_ok_and_resume_stream_completes_run(): void
+    {
+        $this->withoutMiddleware(ValidateCsrfToken::class);
+
+        $base = AdminWeb::basePath();
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'site_name'],
+            ['setting_value' => 'BeforeResume']
+        );
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'admin_base_path'],
+            ['setting_value' => $base]
+        );
+
+        $admin = $this->createAdmin();
+        $model = $this->createAiModel();
+        $session = AdminAiOpsSession::query()->create([
+            'admin_id' => (int) $admin->id,
+            'title' => '批准续流',
+        ]);
+
+        $run = AdminAiOpsRun::query()->create([
+            'session_id' => (int) $session->id,
+            'admin_id' => (int) $admin->id,
+            'ai_model_id' => $model->id,
+            'status' => 'awaiting_confirmation',
+            'input_text' => '改站点名',
+            'plan_stream_snapshot' => [
+                'partial_assistant_text' => '我先说明一下。',
+                'assistant_timeline' => [
+                    'completedRounds' => [],
+                    'segments' => [
+                        ['kind' => 'text', 'text' => '我先说明一下。'],
+                        [
+                            'kind' => 'tools',
+                            'tools' => [[
+                                'toolCallId' => 'tc-patch-1',
+                                'name' => 'AdminOpsSitePatchBasicsTool',
+                                'phase' => 'awaiting_approval',
+                            ]],
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        $approvalId = (string) Str::uuid();
+        AdminAiOpsToolApproval::query()->create([
+            'id' => $approvalId,
+            'run_id' => (int) $run->id,
+            'admin_id' => (int) $admin->id,
+            'tool_name' => 'AdminOpsSitePatchBasicsTool',
+            'tool_call_id' => 'tc-patch-1',
+            'arguments_json' => json_encode(['patch' => ['site_name' => 'AfterResume']], JSON_THROW_ON_ERROR),
+            'args_fingerprint' => hash('sha256', 'z'),
+            'risk_label' => 'test',
+            'status' => 'pending',
+            'expires_at' => now()->addHour(),
+        ]);
+
+        $approve = $this->actingAs($admin, 'admin')
+            ->postJson(route('admin.ai-ops.runs.tool-approvals.approve', [
+                'runId' => $run->id,
+                'approvalId' => $approvalId,
+            ]))
+            ->assertOk()
+            ->assertJsonPath('executed_ok', true)
+            ->assertJsonPath('executed_this_request', true);
+
+        $this->assertSame('tc-patch-1', (string) AdminAiOpsToolApproval::query()->find($approvalId)?->tool_call_id);
+
+        $resumeUrl = (string) $approve->json('resume_stream_url');
+        $this->assertNotSame('', $resumeUrl);
+
+        $this->partialMock(AdminAiOpsChatService::class, function ($mock): void {
+            $mock->shouldReceive('streamAssistantResumeAfterApproval')
+                ->once()
+                ->andReturn('根据工具结果，站点名称已更新。');
+        });
+
+        $response = $this->actingAs($admin, 'admin')->get($resumeUrl);
+        $response->assertOk();
+        $body = $response->streamedContent();
+        $this->assertStringContainsString('"phase":"done"', $body);
+        $this->assertStringContainsString('tc-patch-1', $body);
+
+        $this->assertDatabaseHas('admin_ai_ops_runs', [
+            'id' => $run->id,
+            'status' => 'completed',
+        ]);
+    }
+
     public function test_reject_then_resume_stream_completes_run_with_summary(): void
     {
         $this->withoutMiddleware(ValidateCsrfToken::class);
