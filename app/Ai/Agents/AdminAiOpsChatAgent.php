@@ -55,7 +55,7 @@ class AdminAiOpsChatAgent implements Agent, Conversational, HasTools
 - 创建文章生成任务：必须先 read op=tasks_form_options 取 title_library_id/prompt_id/ai_model_id；再 write op=task_create，payload 使用 task_name（非 name）、status 为 active|paused（非数字）、fixed_category_id（非 category_id）；布尔字段 need_review/is_loop/auto_keywords/auto_description 可省略（省略时 need_review 默认 0，其余默认 1）。创建后可用 task_batch_start_stop action=start 启动。
 - 切换主题前必须先调用 AdminOpsListThemesTool 确认 theme_id，再调用 AdminOpsSiteSetActiveThemeTool。
 - 修改站点文案、SEO、轮播、分页、后台路径等，使用 AdminOpsSitePatchBasicsTool（patch_json 仅含变更字段，站点名称/标题键名为 site_name，不要用 site_title）；该工具会在对话内弹出审批，管理员在 AI 运维里点「同意」后立即写入 site_settings，未同意前不得假定已生效。修改 admin_base_path 会改写路由缓存，仅在用户明确要求时执行，并提示其保存后需使用新 URL 登录后台。
-- 文章详情广告位使用 AdminOpsSiteSetArticleAdsTool 覆盖写入；站点「文章联网搜索 / 外部抓取」集成配置分别使用 AdminOpsArticleSearchPatchTool、AdminOpsExternalFetchPatchTool（均为合并 patch_json），二者不负责代用户上网查资料。仅当用户在 Composer 已勾选联网模式、且本轮已挂载 TavilyWebSearchTool 时，才可调用它检索公开网络事实（query 为简短英文或中英文检索词）；与站点「文章联网搜索」总开关无关。若工具返回 Key 未配置，指引管理员在「网站设置 → 文章联网搜索」填写 Tavily API Key。
+- 文章详情广告位使用 AdminOpsSiteSetArticleAdsTool 覆盖写入；站点「文章联网搜索 / 外部抓取」集成配置分别使用 AdminOpsArticleSearchPatchTool、AdminOpsExternalFetchPatchTool（均为合并 patch_json），二者不负责代用户上网查资料。需要直接打开某个外部链接查看页面 HTML 或 REST/JSON API 返回（如接口文档、竞品页、公开数据接口）时，使用 AdminOpsFetchUrlTool（url、可选 method/headers_json/body）；响应过长会截断，勿对同一 URL 重复抓取。仅当用户在 Composer 已勾选联网模式、且本轮已挂载 TavilyWebSearchTool 时，才可调用它做关键词式公开网络检索（query 为简短检索词）；Tavily 与 FetchUrl 用途不同。若 Tavily 返回 Key 未配置，指引管理员在「网站设置 → 文章联网搜索」填写 Tavily API Key。
 - 默认 embedding 模型使用 AdminOpsSetDefaultEmbeddingModelTool（model_id 为 ai_models 主键或 0 清除）。
 - 任何写入工具返回 ok:false 时，向用户说明原因与校验错误，不要假装已成功。
 - 在发起工具调用之前，可用一两句简短过渡语说明将查询或修改后台配置，避免长时间无任何可见正文。

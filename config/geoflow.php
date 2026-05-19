@@ -96,4 +96,17 @@ return [
     // AI 运维 SSE 工具原始输出截断上限（tool/done 的 raw_output）
     'admin_ai_ops_sse_raw_output_max_bytes' => max(8192, min(2_097_152, (int) env('GEOFLOW_ADMIN_AI_OPS_SSE_RAW_OUTPUT_MAX_BYTES', 65536))),
 
+    // AI 运维：抓取外部 URL（页面 / API），供 Agent 参考；默认启用并做 SSRF 防护
+    'admin_ai_ops_url_fetch' => [
+        'enabled' => filter_var(env('GEOFLOW_ADMIN_AI_OPS_URL_FETCH_ENABLED', true), FILTER_VALIDATE_BOOLEAN),
+        'timeout_seconds' => max(3, min(60, (int) env('GEOFLOW_ADMIN_AI_OPS_URL_FETCH_TIMEOUT', 15))),
+        'max_response_bytes' => max(8192, min(2_097_152, (int) env('GEOFLOW_ADMIN_AI_OPS_URL_FETCH_MAX_BYTES', 262144))),
+        'max_body_preview_chars' => max(500, min(50000, (int) env('GEOFLOW_ADMIN_AI_OPS_URL_FETCH_MAX_PREVIEW_CHARS', 12000))),
+        // 逗号分隔主机后缀白名单；留空表示不限制公网主机（仍禁止内网/本机）
+        'allow_hosts' => array_values(array_filter(array_map(
+            static fn (string $h): string => strtolower(trim($h)),
+            explode(',', (string) env('GEOFLOW_ADMIN_AI_OPS_URL_FETCH_ALLOW_HOSTS', ''))
+        ), static fn (string $h): bool => $h !== '')),
+    ],
+
 ];

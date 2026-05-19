@@ -6,6 +6,7 @@ use App\Ai\Agents\AdminAiOpsChatAgent;
 use App\Ai\Tools\AdminOpsAdminActionTool;
 use App\Ai\Tools\AdminOpsArticleSearchPatchTool;
 use App\Ai\Tools\AdminOpsExternalFetchPatchTool;
+use App\Ai\Tools\AdminOpsFetchUrlTool;
 use App\Ai\Tools\AdminOpsListCategoriesTool;
 use App\Ai\Tools\AdminOpsListThemesTool;
 use App\Ai\Tools\AdminOpsSetDefaultEmbeddingModelTool;
@@ -53,6 +54,7 @@ class AdminAiOpsChatService
         private readonly AdminOpsExternalFetchPatchTool $externalFetchPatchTool,
         private readonly TavilyWebSearchTool $tavilyWebSearchTool,
         private readonly AdminOpsSetDefaultEmbeddingModelTool $setDefaultEmbeddingModelTool,
+        private readonly AdminOpsFetchUrlTool $fetchUrlTool,
     ) {}
 
     /**
@@ -288,6 +290,9 @@ class AdminAiOpsChatService
             $this->externalFetchPatchTool,
             $this->setDefaultEmbeddingModelTool,
         ];
+        if ((bool) config('geoflow.admin_ai_ops_url_fetch.enabled', true)) {
+            $tools[] = $this->fetchUrlTool;
+        }
         if ($webSearchEnabled) {
             $tools[] = $this->tavilyWebSearchTool;
         }
