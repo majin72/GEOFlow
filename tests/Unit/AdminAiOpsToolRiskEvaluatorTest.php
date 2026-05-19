@@ -66,4 +66,17 @@ class AdminAiOpsToolRiskEvaluatorTest extends TestCase
 
         $this->assertNull($label);
     }
+
+    public function test_set_active_theme_requires_approval(): void
+    {
+        config(['geoflow.admin_ai_ops_tool_approval.enabled' => true]);
+
+        $eval = new AdminAiOpsToolRiskEvaluator;
+        $label = $eval->evaluate('AdminOpsSiteSetActiveThemeTool', [
+            'theme_id' => 'default',
+        ]);
+
+        $this->assertNotNull($label);
+        $this->assertStringContainsString('site_set_theme', (string) $label);
+    }
 }

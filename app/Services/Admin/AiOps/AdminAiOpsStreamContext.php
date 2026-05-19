@@ -33,12 +33,15 @@ final class AdminAiOpsStreamContext
         $snapshot = is_array($planStreamSnapshot) ? $planStreamSnapshot : [];
         $partial = (string) ($snapshot['partial_assistant_text'] ?? '');
 
-        return new self(
+        $ctx = new self(
             runId: $runId,
             adminId: $adminId,
             partialAssistantText: $partial,
             timeline: AdminAiOpsAssistantTimelineRecorder::fromSnapshot($snapshot),
         );
+        $ctx->lastToolCallId = trim((string) ($snapshot['last_tool_call_id'] ?? ''));
+
+        return $ctx;
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Ai\Tools;
 
 use App\Services\Admin\AdminOps\AdminOpsSiteWriteService;
+use App\Services\Admin\AiOps\AdminAiOpsPendingWriteGuard;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Support\Arr;
 use Laravel\Ai\Contracts\Tool;
@@ -18,6 +19,7 @@ final class AdminOpsSetDefaultEmbeddingModelTool implements Tool
 {
     public function __construct(
         private readonly AdminOpsSiteWriteService $siteWrite,
+        private readonly AdminAiOpsPendingWriteGuard $writeGuard,
     ) {}
 
     /**
@@ -44,10 +46,11 @@ final class AdminOpsSetDefaultEmbeddingModelTool implements Tool
             $modelId = 0;
         }
 
-        return json_encode(
-            $this->siteWrite->setDefaultEmbeddingModelId($modelId),
-            JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
-        ) ?: '{}';
+        return $this->writeGuard->runJson(
+            'AdminOpsSetDefaultEmbeddingModelTool',
+            ['model_id' => $modelId],
+            fn (): array => $this->siteWrite->setDefaultEmbeddingModelId($modelId),
+        );
     }
 
     /**

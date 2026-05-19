@@ -343,14 +343,6 @@ const root = document.getElementById('admin-ai-ops-page');
          */
         function applyDeltaToLive(live, accumulatedText) {
             const t = String(accumulatedText || '');
-            const prev = plainTextFromSegments(live.segments);
-            const shrinks = t.length < prev.length;
-            const breaksPrefix = prev !== '' && t !== '' && !t.startsWith(prev);
-            const suffixTruncate = shrinks && t !== '' && prev.startsWith(t);
-            const blankBetweenSegments = shrinks && t === '' && prev !== '';
-            if (((breaksPrefix && !suffixTruncate) || blankBetweenSegments) && prev !== '') {
-                archiveAssistantSegmentIfNeeded(live);
-            }
             if (live.textLocked) {
                 if (isStalePreToolDelta(live, t)) {
                     return;
@@ -400,17 +392,57 @@ const root = document.getElementById('admin-ai-ops-page');
          */
         function findToolRowByCallId(live, toolCallId) {
             const tid = String(toolCallId || '');
-            for (let si = live.segments.length - 1; si >= 0; si -= 1) {
-                const seg = live.segments[si];
-                if (seg.kind !== 'tools' || !Array.isArray(seg.tools)) {
-                    continue;
+            if (!tid) {
+                return null;
+            }
+
+            const searchSegments = (segments) => {
+                for (let si = (segments || []).length - 1; si >= 0; si -= 1) {
+                    const seg = segments[si];
+                    if (seg.kind !== 'tools' || !Array.isArray(seg.tools)) {
+                        continue;
+                    }
+                    const row = [...seg.tools].reverse().find((x) => x.toolCallId === tid);
+                    if (row) {
+                        return row;
+                    }
                 }
-                const row = [...seg.tools].reverse().find((x) => x.toolCallId === tid);
-                if (row) {
-                    return row;
+                return null;
+            };
+
+            const inCurrent = searchSegments(live.segments);
+            if (inCurrent) {
+                return inCurrent;
+            }
+
+            const rounds = live.completedRounds || [];
+            for (let ri = rounds.length - 1; ri >= 0; ri -= 1) {
+                const inRound = searchSegments(rounds[ri].segments);
+                if (inRound) {
+                    return inRound;
                 }
             }
+
             return null;
+        }
+
+        /**
+         * @param {object} live
+         * @param {string} toolCallId
+         * @param {string} phase
+         * @param {object} [extras]
+         */
+        function markToolPhaseByCallId(live, toolCallId, phase, extras = {}) {
+            const toolName = String(extras.toolName || '');
+            let row = toolCallId ? findToolRowByCallId(live, toolCallId) : null;
+            if (!row) {
+                row = findLastPendingApprovalToolRow(live, toolName);
+            }
+            if (!row) {
+                return;
+            }
+            row.phase = phase;
+            Object.assign(row, extras);
         }
 
         /**
@@ -418,10 +450,17 @@ const root = document.getElementById('admin-ai-ops-page');
          * @param {object} data
          */
         function recordToolDoneToLive(live, data) {
-            const tid = String(data.tool_call_id || '');
+            const toolName = String(data.tool_name || '');
+            let tid = String(data.tool_call_id || '').trim();
+            if (!tid || !findToolRowByCallId(live, tid)) {
+                const pending = findLastPendingApprovalToolRow(live, toolName);
+                if (pending && pending.toolCallId) {
+                    tid = String(pending.toolCallId);
+                }
+            }
             const rp = data.result_preview != null ? String(data.result_preview) : '';
-            let row = findToolRowByCallId(live, tid);
-            if (row && row.phase === 'calling') {
+            const row = tid ? findToolRowByCallId(live, tid) : findLastPendingApprovalToolRow(live, toolName);
+            if (row) {
                 row.phase = 'done';
                 row.successful = !!data.successful;
                 row.error = data.error ? String(data.error) : '';
@@ -488,7 +527,10 @@ const root = document.getElementById('admin-ai-ops-page');
         }
 
         function classifyToolShouldExpand(t) {
-            if (t.phase === 'calling') {
+            if (t.phase === 'calling' || t.phase === 'awaiting_approval' || t.phase === 'executing') {
+                return true;
+            }
+            if (t.phase === 'rejected') {
                 return true;
             }
             if (t.phase === 'done' && t.successful === false) {
@@ -499,11 +541,27 @@ const root = document.getElementById('admin-ai-ops-page');
 
         function renderAiOpsToolCardHtml(t) {
             const isCalling = t.phase === 'calling';
-            const failed = t.phase === 'done' && t.successful === false;
-            const label = isCalling ? text.toolPhaseCalling : (failed ? text.toolPhaseFailed : text.toolPhaseDone);
-            const tone = isCalling
+            const executing = t.phase === 'executing';
+            const awaiting = t.phase === 'awaiting_approval';
+            const rejected = t.phase === 'rejected';
+            const failed = !rejected && t.phase === 'done' && t.successful === false;
+            let label = text.toolPhaseDone;
+            if (isCalling) {
+                label = text.toolPhaseCalling;
+            } else if (executing) {
+                label = text.toolPhaseExecuting;
+            } else if (awaiting) {
+                label = text.toolPhaseAwaitingApproval;
+            } else if (rejected) {
+                label = text.toolPhaseRejected;
+            } else if (failed) {
+                label = text.toolPhaseFailed;
+            }
+            const tone = isCalling || executing || awaiting
                 ? 'border-amber-200 bg-amber-50/90 text-amber-900'
-                : (failed ? 'border-rose-200 bg-rose-50/90 text-rose-900' : 'border-emerald-200 bg-emerald-50/90 text-emerald-900');
+                : (rejected || failed
+                    ? 'border-rose-200 bg-rose-50/90 text-rose-900'
+                    : 'border-emerald-200 bg-emerald-50/90 text-emerald-900');
             const duration = formatDurationMs(t.durationMs);
             const openAttr = classifyToolShouldExpand(t) ? ' open' : '';
             const parts = [];
@@ -632,22 +690,75 @@ const root = document.getElementById('admin-ai-ops-page');
         }
 
         /**
-         * 当检测到新的流式正文段（非前缀延续）时，将当前段与工具时间线归档，避免后一轮顶掉前几轮。
+         * 将 completedRounds 压平进 segments，避免续流/完成态出现多段分隔线与残片。
          *
          * @param {object} live
-         * @param {string} prevText
          */
-        function archiveAssistantSegmentIfNeeded(live) {
-            if (!(live.segments || []).length) {
-                return;
+        function flattenLiveTimelineRounds(live) {
+            const merged = [];
+            (live.completedRounds || []).forEach((round) => {
+                (round.segments || []).forEach((seg) => merged.push(seg));
+            });
+            (live.segments || []).forEach((seg) => merged.push(seg));
+            live.segments = mergeAdjacentTextSegments(cloneTimelineSegments(merged));
+            live.completedRounds = [];
+        }
+
+        /**
+         * 合并相邻 text 段；若后段是前段超集则保留较长者，避免工具轮次后重复开头。
+         *
+         * @param {Array<object>} segments
+         * @returns {Array<object>}
+         */
+        function mergeAdjacentTextSegments(segments) {
+            const out = [];
+            (segments || []).forEach((seg) => {
+                if (seg.kind !== 'text') {
+                    out.push({ ...seg, tools: seg.tools ? [...seg.tools] : undefined });
+                    return;
+                }
+                const t = String(seg.text || '');
+                if (!t.trim()) {
+                    return;
+                }
+                if (out.length && out[out.length - 1].kind === 'text') {
+                    const prev = String(out[out.length - 1].text || '');
+                    if (t.startsWith(prev) || prev.startsWith(t)) {
+                        out[out.length - 1].text = t.length >= prev.length ? t : prev;
+                    } else {
+                        out[out.length - 1].text = `${prev}\n\n${t}`;
+                    }
+                    return;
+                }
+                out.push({ kind: 'text', text: t });
+            });
+            return out;
+        }
+
+        /**
+         * 展示前规范化时间线（压平历史轮次、合并重复正文）。
+         *
+         * @param {object} live
+         * @returns {object}
+         */
+        function compactLiveTimelineForDisplay(live) {
+            const copy = {
+                segments: cloneTimelineSegments(live.segments || []),
+                completedRounds: (live.completedRounds || []).map((round) => ({
+                    segments: cloneTimelineSegments(round.segments || []),
+                })),
+                textLocked: !!live.textLocked,
+                preToolTextSnapshot: String(live.preToolTextSnapshot || ''),
+                streamPending: !!live.streamPending,
+                streamConnected: !!live.streamConnected,
+                awaitingModelAfterTools: !!live.awaitingModelAfterTools,
+            };
+            if (copy.completedRounds.length > 0) {
+                flattenLiveTimelineRounds(copy);
+            } else {
+                copy.segments = mergeAdjacentTextSegments(copy.segments);
             }
-            if (!Array.isArray(live.completedRounds)) {
-                live.completedRounds = [];
-            }
-            live.completedRounds.push({ segments: cloneTimelineSegments(live.segments) });
-            live.segments = [];
-            live.textLocked = false;
-            live.preToolTextSnapshot = '';
+            return copy;
         }
 
         /**
@@ -658,20 +769,14 @@ const root = document.getElementById('admin-ai-ops-page');
          * @returns {string}
          */
         function buildAssistantLiveBodyHtml(st, live) {
+            const display = compactLiveTimelineForDisplay(live);
             const chunks = [];
-            (live.completedRounds || []).forEach((round) => {
-                const inner = renderSegmentsHtml(round.segments);
-                if (inner.trim()) {
-                    chunks.push(`<div class="mb-5 border-b border-slate-100 pb-5 last:mb-0 last:border-b-0 last:pb-0">${inner}</div>`);
-                }
-            });
-
-            const curInner = renderSegmentsHtml(live.segments);
-            if (curInner.trim()) {
-                chunks.push(curInner);
+            const inner = renderSegmentsHtml(display.segments);
+            if (inner.trim()) {
+                chunks.push(inner);
             }
 
-            const flatTools = collectLiveToolsFlat(live);
+            const flatTools = collectLiveToolsFlat(display);
             const allToolsDone = flatTools.length > 0 && flatTools.every((t) => t.phase === 'done');
             if (
                 live.awaitingModelAfterTools &&
@@ -788,11 +893,112 @@ const root = document.getElementById('admin-ai-ops-page');
 
         let pendingApprovalCtx = null;
 
+        /** @type {Record<string, string>} */
+        const approvalToolCallByRunId = {};
+
+        /**
+         * 解析审批对应的 tool_call_id（SSE / 会话 / 内存兜底）。
+         *
+         * @param {object} live
+         * @param {number|string} runId
+         * @param {string} toolCallId
+         * @param {string} toolName
+         * @returns {string}
+         */
+        function resolveApprovalToolCallId(live, runId, toolCallId, toolName) {
+            const tid = String(toolCallId || '').trim();
+            if (tid && findToolRowByCallId(live, tid)) {
+                return tid;
+            }
+            const fromMap = String(approvalToolCallByRunId[String(runId)] || '').trim();
+            if (fromMap && findToolRowByCallId(live, fromMap)) {
+                return fromMap;
+            }
+            const row = findLastPendingApprovalToolRow(live, toolName);
+            if (row && row.toolCallId) {
+                return String(row.toolCallId);
+            }
+            return tid || fromMap;
+        }
+
+        /**
+         * @param {object} live
+         * @param {string} [toolName]
+         * @returns {object|null}
+         */
+        function findLastPendingApprovalToolRow(live, toolName = '') {
+            const flat = collectLiveToolsFlat(live);
+            const pendingPhases = ['awaiting_approval', 'calling', 'executing'];
+            const candidates = flat.filter((t) => pendingPhases.includes(t.phase));
+            const name = String(toolName || '').trim();
+            if (name) {
+                for (let i = candidates.length - 1; i >= 0; i -= 1) {
+                    if (candidates[i].name === name) {
+                        return candidates[i];
+                    }
+                }
+            }
+            return candidates.length ? candidates[candidates.length - 1] : null;
+        }
+
+        /**
+         * 渲染 run 时优先使用内存中的 live 缓冲（审批/续流中的实时状态）。
+         *
+         * @param {object} run
+         * @returns {object}
+         */
+        function resolveLiveTimelineForRun(run) {
+            const runId = String(run.id);
+            if (Object.prototype.hasOwnProperty.call(state.liveByRunId, runId)) {
+                const buf = normalizeLiveSnapshot(run.id);
+                if (timelineHasDisplayableContent(buf)) {
+                    return buf;
+                }
+            }
+            const persisted = assistantTimelineFromRun(run);
+            if (persisted && timelineHasDisplayableContent(persisted)) {
+                return persisted;
+            }
+            return normalizeLiveSnapshot(run.id);
+        }
+
+        /**
+         * 将内存 live 时间线同步回 run 对象，避免被陈旧 assistant_timeline 盖住。
+         *
+         * @param {object} run
+         */
+        function syncRunAssistantTimelineFromLiveBuffer(run) {
+            const runId = String(run.id);
+            if (!Object.prototype.hasOwnProperty.call(state.liveByRunId, runId)) {
+                return;
+            }
+            const buf = normalizeLiveSnapshot(run.id);
+            if (!timelineHasDisplayableContent(buf)) {
+                return;
+            }
+            const compact = compactLiveTimelineForDisplay(buf);
+            state.liveByRunId[runId] = {
+                ...buf,
+                segments: compact.segments,
+                completedRounds: [],
+            };
+            run.assistant_timeline = {
+                completedRounds: [],
+                segments: cloneTimelineSegments(compact.segments),
+            };
+        }
+
         function showToolApprovalModal(runId, payload) {
             const approvalId = String(payload.id || payload.approval_id || '');
+            const rid = Number(runId);
             pendingApprovalCtx = {
-                runId: Number(runId),
+                runId: rid,
                 approvalId,
+                toolCallId: String(
+                    payload.tool_call_id
+                    || approvalToolCallByRunId[String(rid)]
+                    || '',
+                ),
                 toolName: String(payload.tool_name || ''),
                 summary: String(payload.summary || ''),
                 expiresAt: String(payload.expires_at || ''),
@@ -827,8 +1033,15 @@ const root = document.getElementById('admin-ai-ops-page');
         }
 
         function onAiOpsSseFinished() {
+            const finishedRunId = state.activeStreamRunId;
             closeRunEventSource();
             setComposerLoading(false);
+            if (state.currentSession?.id && finishedRunId) {
+                const runRow = state.currentSession.runs?.find((r) => Number(r.id) === Number(finishedRunId));
+                if (runRow) {
+                    syncRunAssistantTimelineFromLiveBuffer(runRow);
+                }
+            }
             loadSessions().catch(() => {});
             if (state.currentSession?.id) {
                 selectSession(Number(state.currentSession.id)).catch(() => {});
@@ -841,12 +1054,35 @@ const root = document.getElementById('admin-ai-ops-page');
          * @param {object} live
          * @param {string} previewText
          */
-        function markCallingToolsAsAwaitingApprovalDone(live, previewText) {
+        /**
+         * @param {object} live
+         * @param {string} toolCallId
+         * @param {string} reason
+         */
+        function markToolRejectedByCallId(live, toolCallId, reason) {
+            const tid = String(toolCallId || '');
+            if (!tid) {
+                return;
+            }
+            const row = findToolRowByCallId(live, tid);
+            if (!row) {
+                return;
+            }
+            row.phase = 'rejected';
+            row.successful = false;
+            const r = String(reason || '').trim();
+            if (r) {
+                row.error = r;
+                row.resultPreview = r;
+            }
+        }
+
+        function markCallingToolsAwaitingApproval(live, previewText) {
             const pv = String(previewText || '').trim();
             const mark = (t) => {
                 if (t && t.phase === 'calling') {
-                    t.phase = 'done';
-                    t.successful = true;
+                    t.phase = 'awaiting_approval';
+                    t.successful = false;
                     if (pv) {
                         t.resultPreview = pv;
                     }
@@ -861,13 +1097,57 @@ const root = document.getElementById('admin-ai-ops-page');
             updateHeaderFromSession();
         }
 
+        /**
+         * @param {object} live
+         * @param {object} data
+         */
+        function applyToolPhaseEventToLive(live, data) {
+            const phase = String(data.phase || '');
+            const tid = String(data.tool_call_id || '');
+            if (phase === 'calling') {
+                recordToolCallingToLive(live, data);
+                return;
+            }
+            if (phase === 'awaiting_approval') {
+                let row = findToolRowByCallId(live, tid);
+                if (!row) {
+                    recordToolCallingToLive(live, data);
+                    row = findToolRowByCallId(live, tid);
+                }
+                if (row) {
+                    row.phase = 'awaiting_approval';
+                    row.successful = false;
+                    const rp = data.result_preview != null ? String(data.result_preview) : '';
+                    if (rp) {
+                        row.resultPreview = rp;
+                    }
+                }
+                return;
+            }
+            if (phase === 'rejected') {
+                const reason = data.error != null ? String(data.error) : (data.result_preview != null ? String(data.result_preview) : '');
+                markToolRejectedByCallId(live, tid, reason);
+                return;
+            }
+            if (phase === 'done') {
+                recordToolDoneToLive(live, data);
+            }
+        }
+
         function bindAiOpsSseHandlers(es, id) {
             es.addEventListener('approval_required', (e) => {
                 try {
                     const data = JSON.parse(e.data);
-                    markCallingToolsAsAwaitingApprovalDone(ensureLiveStruct(id), text.toolPendingApprovalResult);
+                    const live = ensureLiveStruct(id);
+                    const tcid = String(data.tool_call_id || '').trim();
+                    if (tcid) {
+                        approvalToolCallByRunId[id] = tcid;
+                    }
+                    markCallingToolsAwaitingApproval(live, text.toolPendingApprovalResult);
+                    renderTranscript();
                     showToolApprovalModal(Number(id), {
                         id: data.approval_id,
+                        tool_call_id: tcid,
                         tool_name: data.tool_name,
                         summary: data.summary,
                         expires_at: data.expires_at,
@@ -887,6 +1167,11 @@ const root = document.getElementById('admin-ai-ops-page');
                     live.awaitingModelAfterTools = false;
                     if (t) {
                         live.streamPending = false;
+                        live.streamConnected = true;
+                    }
+                    const runRow = state.currentSession?.runs?.find((r) => String(r.id) === String(id));
+                    if (runRow) {
+                        syncRunAssistantTimelineFromLiveBuffer(runRow);
                     }
                     renderTranscript();
                     updateHeaderFromSession();
@@ -923,11 +1208,13 @@ const root = document.getElementById('admin-ai-ops-page');
                     if (!Array.isArray(live.segments)) {
                         live.segments = [];
                     }
-                    if (data.phase === 'calling') {
-                        live.awaitingModelAfterTools = false;
-                        recordToolCallingToLive(live, data);
-                    } else if (data.phase === 'done') {
-                        recordToolDoneToLive(live, data);
+                    live.awaitingModelAfterTools = false;
+                    applyToolPhaseEventToLive(live, data);
+                    const runRowTool = state.currentSession?.runs?.find((r) => String(r.id) === String(id));
+                    if (runRowTool) {
+                        syncRunAssistantTimelineFromLiveBuffer(runRowTool);
+                    }
+                    if (data.phase === 'done') {
                         const run = state.currentSession?.runs?.find((r) => String(r.id) === String(id));
                         const st = run ? String(run.status || '') : '';
                         const anyCalling = collectLiveToolsFlat(live).some((x) => x.phase === 'calling');
@@ -961,9 +1248,10 @@ const root = document.getElementById('admin-ai-ops-page');
                                 run = { ...run, client_ai_ops_body_html: mergedHtml };
                             }
                             if (liveSnap && timelineHasDisplayableContent(liveSnap)) {
+                                const compact = compactLiveTimelineForDisplay(liveSnap);
                                 run = { ...run, assistant_timeline: {
-                                    completedRounds: liveSnap.completedRounds || [],
-                                    segments: liveSnap.segments || [],
+                                    completedRounds: [],
+                                    segments: compact.segments || [],
                                 } };
                             }
                         }
@@ -1032,16 +1320,28 @@ const root = document.getElementById('admin-ai-ops-page');
         function openResumeEventSourceFromUrl(fullUrl, runId) {
             const id = String(runId);
             const prior = state.liveByRunId[id];
-            let seeded = buildCompletedRoundsFromPriorLive(prior && typeof prior === 'object' ? prior : null);
-            if (!seeded.length) {
-                seeded = seedCompletedRoundsFromSessionRun(runId);
+            const resumed = createEmptyLiveStruct(true);
+
+            if (prior && typeof prior === 'object') {
+                const normalized = Array.isArray(prior.segments) ? prior : migrateLegacyLiveSnapshot(prior);
+                resumed.completedRounds = (normalized.completedRounds || []).map((round) => ({
+                    segments: cloneTimelineSegments(round.segments),
+                }));
+                resumed.segments = cloneTimelineSegments(normalized.segments || []);
+                resumed.preToolTextSnapshot = String(normalized.preToolTextSnapshot || '');
+                resumed.textLocked = false;
+                flattenLiveTimelineRounds(resumed);
+            } else {
+                resumed.completedRounds = seedCompletedRoundsFromSessionRun(runId);
             }
 
+            resumed.resumeStreamActive = true;
+            resumed.streamPending = true;
+            resumed.streamConnected = false;
             closeRunEventSource();
             state.activeStreamRunId = Number(runId);
-            const resumed = createEmptyLiveStruct(true);
-            resumed.completedRounds = seeded;
             state.liveByRunId[id] = resumed;
+            renderTranscript();
             setComposerLoading(true);
             const es = new EventSource(fullUrl, { withCredentials: true });
             state.eventSource = es;
@@ -1154,12 +1454,11 @@ const root = document.getElementById('admin-ai-ops-page');
                     </div>`);
                 }
                 const st = String(run.status || '');
-                const persistedTimeline = assistantTimelineFromRun(run);
-                const live = persistedTimeline || normalizeLiveSnapshot(run.id);
+                const live = resolveLiveTimelineForRun(run);
                 let bodyInner = '';
                 if (st === 'completed') {
-                    if (persistedTimeline && timelineHasDisplayableContent(persistedTimeline)) {
-                        bodyInner = buildAssistantLiveBodyHtml(st, persistedTimeline);
+                    if (timelineHasDisplayableContent(live)) {
+                        bodyInner = buildAssistantLiveBodyHtml(st, live);
                     }
                     if (!bodyInner.trim() && run.client_ai_ops_body_html) {
                         bodyInner = run.client_ai_ops_body_html;
@@ -1325,29 +1624,65 @@ const root = document.getElementById('admin-ai-ops-page');
             const rid = Number(btn.getAttribute('data-run-id'));
             const run = state.currentSession?.runs?.find((r) => Number(r.id) === rid);
             if (run?.approval_pending) {
-                showToolApprovalModal(rid, run.approval_pending);
+                showToolApprovalModal(rid, {
+                    ...run.approval_pending,
+                    tool_call_id:
+                        run.approval_pending.tool_call_id
+                        || approvalToolCallByRunId[String(rid)]
+                        || '',
+                });
             }
-        });
-
-        document.getElementById('ai-ops-tool-approval-close')?.addEventListener('click', () => {
-            hideToolApprovalModal();
         });
 
         document.getElementById('ai-ops-tool-approval-approve-btn')?.addEventListener('click', () => {
             if (!pendingApprovalCtx) return;
-            const url = aiOpsHttp.approveUrl(pendingApprovalCtx.runId, pendingApprovalCtx.approvalId);
+            const ctx = { ...pendingApprovalCtx };
+            const url = aiOpsHttp.approveUrl(ctx.runId, ctx.approvalId);
             if (!url) {
                 alert(text.networkError);
                 return;
             }
-            const rid = pendingApprovalCtx.runId;
+            const rid = ctx.runId;
+            const toolName = ctx.toolName || '';
+            hideToolApprovalModal();
+            setComposerLoading(true);
+            const live = ensureLiveStruct(rid);
+            const toolCallId = resolveApprovalToolCallId(live, rid, ctx.toolCallId, toolName);
+            if (toolCallId) {
+                approvalToolCallByRunId[String(rid)] = toolCallId;
+                markToolPhaseByCallId(live, toolCallId, 'executing', { successful: false, toolName });
+                syncRunAssistantTimelineFromLiveBuffer(
+                    state.currentSession?.runs?.find((r) => Number(r.id) === Number(rid)) || { id: rid },
+                );
+                renderTranscript();
+            }
             request(url, { method: 'POST', body: JSON.stringify({}) })
                 .then((res) => {
-                    hideToolApprovalModal();
+                    const liveAfter = ensureLiveStruct(rid);
+                    const resolvedId = resolveApprovalToolCallId(liveAfter, rid, toolCallId, toolName);
+                    if (resolvedId && res && (res.executed_this_request || res.already_executed)) {
+                        const okPreview = res.executed_output_preview != null ? String(res.executed_output_preview) : '';
+                        let successful = true;
+                        if (okPreview.includes('"ok":false') || okPreview.includes('"ok": false')) {
+                            successful = false;
+                        }
+                        recordToolDoneToLive(liveAfter, {
+                            phase: 'done',
+                            tool_call_id: resolvedId,
+                            tool_name: toolName,
+                            successful,
+                            result_preview: okPreview,
+                        });
+                    }
                     if (res && res.run && state.currentSession?.runs) {
                         const runs = [...state.currentSession.runs];
                         const idx = runs.findIndex((r) => Number(r.id) === Number(res.run.id));
-                        if (idx >= 0) runs[idx] = res.run;
+                        if (idx >= 0) {
+                            const merged = { ...res.run };
+                            delete merged.assistant_timeline;
+                            runs[idx] = merged;
+                            syncRunAssistantTimelineFromLiveBuffer(runs[idx]);
+                        }
                         state.currentSession.runs = runs;
                         renderTranscript();
                         updateHeaderFromSession();
@@ -1359,25 +1694,45 @@ const root = document.getElementById('admin-ai-ops-page');
                         selectSession(Number(state.currentSession.id)).catch(() => {});
                     }
                 })
-                .catch((e) => alert(e.message));
+                .catch((e) => {
+                    setComposerLoading(false);
+                    alert(e.message);
+                });
         });
 
         document.getElementById('ai-ops-tool-approval-reject-btn')?.addEventListener('click', () => {
             if (!pendingApprovalCtx) return;
-            const url = aiOpsHttp.rejectUrl(pendingApprovalCtx.runId, pendingApprovalCtx.approvalId);
+            const ctx = { ...pendingApprovalCtx };
+            const url = aiOpsHttp.rejectUrl(ctx.runId, ctx.approvalId);
             if (!url) {
                 alert(text.networkError);
                 return;
             }
-            const rid = pendingApprovalCtx.runId;
+            const rid = ctx.runId;
             const reason = (document.getElementById('ai-ops-tool-approval-reason')?.value || '').trim();
+            const toolName = ctx.toolName || '';
+            hideToolApprovalModal();
+            setComposerLoading(true);
+            const live = ensureLiveStruct(rid);
+            const toolCallId = resolveApprovalToolCallId(live, rid, ctx.toolCallId, toolName);
+            if (toolCallId) {
+                markToolRejectedByCallId(live, toolCallId, reason || text.toolPhaseRejected);
+                syncRunAssistantTimelineFromLiveBuffer(
+                    state.currentSession?.runs?.find((r) => Number(r.id) === Number(rid)) || { id: rid },
+                );
+                renderTranscript();
+            }
             request(url, { method: 'POST', body: JSON.stringify({ reason }) })
                 .then((res) => {
-                    hideToolApprovalModal();
                     if (res && res.run && state.currentSession?.runs) {
                         const runs = [...state.currentSession.runs];
                         const idx = runs.findIndex((r) => Number(r.id) === Number(res.run.id));
-                        if (idx >= 0) runs[idx] = res.run;
+                        if (idx >= 0) {
+                            const merged = { ...res.run };
+                            delete merged.assistant_timeline;
+                            runs[idx] = merged;
+                            syncRunAssistantTimelineFromLiveBuffer(runs[idx]);
+                        }
                         state.currentSession.runs = runs;
                         renderTranscript();
                         updateHeaderFromSession();
@@ -1389,7 +1744,10 @@ const root = document.getElementById('admin-ai-ops-page');
                         selectSession(Number(state.currentSession.id)).catch(() => {});
                     }
                 })
-                .catch((e) => alert(e.message));
+                .catch((e) => {
+                    setComposerLoading(false);
+                    alert(e.message);
+                });
         });
 
         els.form?.addEventListener('submit', (ev) => {

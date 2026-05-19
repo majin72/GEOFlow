@@ -188,7 +188,6 @@
             <textarea id="ai-ops-tool-approval-reason" rows="2" class="w-full rounded-lg border-slate-200 text-sm shadow-sm focus:border-indigo-600 focus:ring-indigo-600"></textarea>
         </div>
         <div class="mt-6 flex flex-wrap justify-end gap-2">
-            <button type="button" id="ai-ops-tool-approval-close" class="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">{{ __('admin.ai_ops.tool_approval_later') }}</button>
             <button type="button" id="ai-ops-tool-approval-reject-btn" class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-800 shadow-sm hover:bg-rose-100">{{ __('admin.ai_ops.tool_reject') }}</button>
             <button type="button" id="ai-ops-tool-approval-approve-btn" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700">{{ __('admin.ai_ops.tool_approve') }}</button>
         </div>
@@ -226,6 +225,9 @@
             'postToolsModelWait' => __('admin.ai_ops.post_tools_model_wait'),
             'toolCalled' => __('admin.ai_ops.tool_called'),
             'toolPhaseCalling' => __('admin.ai_ops.tool_phase_calling'),
+            'toolPhaseExecuting' => __('admin.ai_ops.tool_phase_executing'),
+            'toolPhaseAwaitingApproval' => __('admin.ai_ops.tool_phase_awaiting_approval'),
+            'toolPhaseRejected' => __('admin.ai_ops.tool_phase_rejected'),
             'toolPhaseDone' => __('admin.ai_ops.tool_phase_done'),
             'toolPhaseFailed' => __('admin.ai_ops.tool_phase_failed'),
             'toolArgsLabel' => __('admin.ai_ops.tool_args_label'),

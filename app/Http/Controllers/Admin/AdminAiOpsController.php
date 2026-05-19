@@ -321,8 +321,12 @@ class AdminAiOpsController extends Controller
                             );
                         }
 
+                        $toolCallId = app()->bound(AdminAiOpsStreamContext::class)
+                            ? trim((string) app(AdminAiOpsStreamContext::class)->lastToolCallId)
+                            : '';
                         $this->writeAdminAiOpsSseJsonEvent('approval_required', [
                             'approval_id' => $e->approvalId,
+                            'tool_call_id' => $toolCallId,
                             'tool_name' => $e->toolName,
                             'summary' => $e->summary,
                             'expires_at' => $e->expiresAtIso8601,
@@ -389,11 +393,18 @@ class AdminAiOpsController extends Controller
             ->with(['steps', 'attachments', 'aiModel'])
             ->firstOrFail();
 
+        $approval->refresh();
+        $executedPreview = null;
+        if ((string) $approval->status === 'executed') {
+            $executedPreview = $this->adminAiOpsSseToolResultDataPreview((string) ($approval->executed_output ?? ''));
+        }
+
         return response()->json([
             'ok' => true,
             'resume_stream_url' => $out['resume_stream_url'],
             'already_executed' => $out['already_executed'],
             'executed_this_request' => $out['executed_this_request'],
+            'executed_output_preview' => $executedPreview,
             'run' => $runs->payload($run),
         ]);
     }
@@ -546,7 +557,12 @@ class AdminAiOpsController extends Controller
                     ),
                 );
                 try {
+                    if ($decision === 'reject') {
+                        $this->emitAdminAiOpsSseToolRejectedFromApproval($approval);
+                    }
+
                     if ($decision === 'approve') {
+                        $this->emitAdminAiOpsSseToolDoneFromExecutedApproval($approval);
                         $assistantText = $chat->streamAssistantResumeAfterApproval(
                             $run,
                             $priorMessages,
@@ -789,15 +805,128 @@ class AdminAiOpsController extends Controller
         }
 
         $preview = (string) __('admin.ai_ops.tool_pending_approval_result_preview');
-        app(AdminAiOpsStreamContext::class)->timeline->markCallingToolsDoneForPendingApproval($preview);
+        app(AdminAiOpsStreamContext::class)->timeline->markCallingToolsAwaitingApproval($preview);
 
         $this->writeAdminAiOpsSseJsonEvent('tool', [
-            'phase' => 'done',
+            'phase' => 'awaiting_approval',
             'tool_call_id' => $lastId,
             'tool_name' => $e->toolName,
-            'successful' => true,
+            'successful' => false,
             'error' => '',
             'result_preview' => $preview,
+        ]);
+    }
+
+    /**
+     * 批准并已执行工具后：补发 tool/done，避免前端长期停留在「待确认」。
+     */
+    private function emitAdminAiOpsSseToolDoneFromExecutedApproval(AdminAiOpsToolApproval $approval): void
+    {
+        if (! app()->bound(AdminAiOpsStreamContext::class)) {
+            return;
+        }
+
+        $toolCallId = $this->resolveAdminAiOpsApprovalToolCallId($approval);
+        if ($toolCallId === '') {
+            return;
+        }
+
+        $output = trim((string) ($approval->executed_output ?? ''));
+        $successful = true;
+        $error = '';
+        if ($output !== '') {
+            $decoded = json_decode($output, true);
+            if (is_array($decoded) && array_key_exists('ok', $decoded)) {
+                $successful = (bool) $decoded['ok'];
+                if (! $successful) {
+                    $error = trim((string) ($decoded['error'] ?? '工具执行失败。'));
+                }
+            }
+        }
+
+        $resultPreview = $this->adminAiOpsSseToolResultDataPreview($output);
+        $rawOutput = $this->adminAiOpsSseToolRawOutput($output);
+
+        app(AdminAiOpsStreamContext::class)->timeline->recordToolDone(
+            $toolCallId,
+            (string) $approval->tool_name,
+            $successful,
+            $error,
+            $resultPreview,
+            null,
+            $rawOutput,
+        );
+
+        $payload = [
+            'phase' => 'done',
+            'tool_call_id' => $toolCallId,
+            'tool_name' => (string) $approval->tool_name,
+            'successful' => $successful,
+            'error' => $error,
+            'result_preview' => $resultPreview,
+        ];
+        if ($rawOutput !== null && $rawOutput !== '') {
+            $payload['raw_output'] = $rawOutput;
+        }
+        $this->writeAdminAiOpsSseJsonEvent('tool', $payload);
+        $this->writeAdminAiOpsSseJsonEvent('stream_status', [
+            'kind' => 'post_tool_model_round',
+            'tool_name' => (string) $approval->tool_name,
+            'successful' => $successful,
+        ]);
+    }
+
+    /**
+     * 从流式上下文或 run 快照解析审批对应的 tool_call_id。
+     */
+    private function resolveAdminAiOpsApprovalToolCallId(AdminAiOpsToolApproval $approval): string
+    {
+        if (app()->bound(AdminAiOpsStreamContext::class)) {
+            $fromCtx = trim((string) app(AdminAiOpsStreamContext::class)->lastToolCallId);
+            if ($fromCtx !== '') {
+                return $fromCtx;
+            }
+        }
+
+        $run = AdminAiOpsRun::query()->whereKey((int) $approval->run_id)->first();
+        if (! $run instanceof AdminAiOpsRun) {
+            return '';
+        }
+
+        $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
+
+        return trim((string) ($snapshot['last_tool_call_id'] ?? ''));
+    }
+
+    /**
+     * 续跑前将已拒绝的审批对应工具卡片同步为 rejected（SSE + 时间线）。
+     */
+    private function emitAdminAiOpsSseToolRejectedFromApproval(AdminAiOpsToolApproval $approval): void
+    {
+        if (! app()->bound(AdminAiOpsStreamContext::class)) {
+            return;
+        }
+
+        $ctx = app(AdminAiOpsStreamContext::class);
+        $toolCallId = trim((string) $ctx->lastToolCallId);
+        if ($toolCallId === '') {
+            return;
+        }
+
+        $reason = trim((string) ($approval->rejection_reason ?? ''));
+        if ($reason === '') {
+            $reason = (string) __('admin.ai_ops.tool_rejected_default_reason');
+        }
+
+        $ctx->timeline->markToolRejectedByCallId($toolCallId, $reason);
+
+        $this->writeAdminAiOpsSseJsonEvent('tool', [
+            'phase' => 'rejected',
+            'tool_call_id' => $toolCallId,
+            'tool_name' => (string) $approval->tool_name,
+            'successful' => false,
+            'error' => $reason,
+            'result_preview' => $reason,
         ]);
     }
 
@@ -838,6 +967,7 @@ class AdminAiOpsController extends Controller
 
         if ($event instanceof AiStreamToolResult) {
             $resultPreview = $this->adminAiOpsSseToolResultDataPreview($event->toolResult->result);
+            $rawOutput = $this->adminAiOpsSseToolRawOutput($event->toolResult->result);
             if (app()->bound(AdminAiOpsStreamContext::class)) {
                 app(AdminAiOpsStreamContext::class)->timeline->recordToolDone(
                     (string) $event->toolResult->id,
@@ -845,16 +975,22 @@ class AdminAiOpsController extends Controller
                     (bool) $event->successful,
                     (string) ($event->error ?? ''),
                     $resultPreview,
+                    null,
+                    $rawOutput,
                 );
             }
-            $this->writeAdminAiOpsSseJsonEvent('tool', [
+            $payload = [
                 'phase' => 'done',
                 'tool_call_id' => $event->toolResult->id,
                 'tool_name' => $event->toolResult->name,
                 'successful' => $event->successful,
                 'error' => $event->error,
                 'result_preview' => $resultPreview,
-            ]);
+            ];
+            if ($rawOutput !== null && $rawOutput !== '') {
+                $payload['raw_output'] = $rawOutput;
+            }
+            $this->writeAdminAiOpsSseJsonEvent('tool', $payload);
             $this->writeAdminAiOpsSseJsonEvent('stream_status', [
                 'kind' => 'post_tool_model_round',
                 'tool_name' => $event->toolResult->name,
@@ -893,6 +1029,59 @@ class AdminAiOpsController extends Controller
         }
 
         return substr($text, 0, $maxBytes).'…';
+    }
+
+    /**
+     * 从工具返回体提取适合「原始输出」面板的终端/stdout 文本（截断后）。
+     */
+    private function adminAiOpsSseToolRawOutput(mixed $result): ?string
+    {
+        $decoded = $this->adminAiOpsSseNormalizeToolResult($result);
+        if ($decoded === null) {
+            return null;
+        }
+
+        if (isset($decoded['raw_output']) && is_string($decoded['raw_output'])) {
+            $raw = trim($decoded['raw_output']);
+        } else {
+            $stdout = isset($decoded['stdout']) && is_string($decoded['stdout']) ? $decoded['stdout'] : '';
+            $stderr = isset($decoded['stderr']) && is_string($decoded['stderr']) ? $decoded['stderr'] : '';
+            $raw = trim($stdout."\n".$stderr);
+        }
+
+        if ($raw === '') {
+            return null;
+        }
+
+        $maxBytes = max(8192, (int) config('geoflow.admin_ai_ops_sse_raw_output_max_bytes', 65536));
+        if (strlen($raw) <= $maxBytes) {
+            return $raw;
+        }
+
+        return substr($raw, 0, $maxBytes).'…';
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function adminAiOpsSseNormalizeToolResult(mixed $result): ?array
+    {
+        if (is_array($result)) {
+            return $result;
+        }
+        if (! is_string($result)) {
+            return null;
+        }
+        $trim = trim($result);
+        if ($trim === '' || $trim[0] !== '{') {
+            return null;
+        }
+        $decoded = json_decode($trim, true);
+        if (! is_array($decoded)) {
+            return null;
+        }
+
+        return $decoded;
     }
 
     /**

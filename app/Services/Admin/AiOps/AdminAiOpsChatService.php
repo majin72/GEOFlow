@@ -27,7 +27,7 @@ use Laravel\Ai\Streaming\Events\TextDelta;
 use RuntimeException;
 
 /**
- * AI 运维对话：向配置的聊天模型发起补全（站点读/写、主题、栏目、统一后台动作、广告、联网搜索与外部抓取等工具，支持流式增量回调）。
+ * AI 运维对话：向配置的聊天模型发起补全（站点读/写、主题、栏目、统一后台动作、广告、联网搜索与外部抓取等工具；不含项目源码访问，支持流式增量回调）。
  */
 class AdminAiOpsChatService
 {

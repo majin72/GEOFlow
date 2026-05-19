@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Ai\Tools;
 
 use App\Services\Admin\AdminOps\AdminOpsSiteWriteService;
+use App\Services\Admin\AiOps\AdminAiOpsPendingWriteGuard;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Support\Arr;
 use Laravel\Ai\Contracts\Tool;
@@ -19,6 +20,7 @@ final class AdminOpsSiteSetArticleAdsTool implements Tool
 {
     public function __construct(
         private readonly AdminOpsSiteWriteService $siteWrite,
+        private readonly AdminAiOpsPendingWriteGuard $writeGuard,
     ) {}
 
     /**
@@ -46,7 +48,11 @@ final class AdminOpsSiteSetArticleAdsTool implements Tool
             return json_encode(['ok' => false, 'error' => 'ads_json 必须为 JSON 数组。'], JSON_UNESCAPED_UNICODE) ?: '{}';
         }
 
-        return json_encode($this->siteWrite->setArticleDetailAds($decoded), JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
+        return $this->writeGuard->runJson(
+            'AdminOpsSiteSetArticleAdsTool',
+            ['ads' => $decoded],
+            fn (): array => $this->siteWrite->setArticleDetailAds($decoded),
+        );
     }
 
     /**

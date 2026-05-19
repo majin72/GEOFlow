@@ -71,11 +71,6 @@ final class AdminAiOpsAssistantTimelineRecorder
     public function applyDelta(string $accumulatedText): void
     {
         $t = (string) $accumulatedText;
-        $prev = $this->plainTextFromSegments();
-
-        if ($this->shouldArchiveForNewModelSegment($prev, $t)) {
-            $this->archiveCurrentSegments();
-        }
 
         if ($this->textLocked) {
             if ($this->isStalePreToolDelta($t)) {
@@ -132,9 +127,9 @@ final class AdminAiOpsAssistantTimelineRecorder
     }
 
     /**
-     * 审批挂起：将仍为 calling 的工具标记为 done。
+     * 审批挂起：将仍为 calling 的工具标记为 awaiting_approval（勿显示为已完成）。
      */
-    public function markCallingToolsDoneForPendingApproval(?string $resultPreview): void
+    public function markCallingToolsAwaitingApproval(?string $resultPreview): void
     {
         foreach ($this->segments as &$segment) {
             if (($segment['kind'] ?? '') !== 'tools' || ! is_array($segment['tools'] ?? null)) {
@@ -142,12 +137,42 @@ final class AdminAiOpsAssistantTimelineRecorder
             }
             foreach ($segment['tools'] as &$tool) {
                 if (($tool['phase'] ?? '') === 'calling') {
-                    $tool['phase'] = 'done';
-                    $tool['successful'] = true;
+                    $tool['phase'] = 'awaiting_approval';
+                    $tool['successful'] = false;
                     if ($resultPreview !== null && $resultPreview !== '') {
                         $tool['resultPreview'] = $resultPreview;
                     }
                 }
+            }
+        }
+        unset($segment, $tool);
+    }
+
+    /**
+     * 用户拒绝审批：按 tool_call_id 将待确认工具标为 rejected。
+     */
+    public function markToolRejectedByCallId(string $toolCallId, ?string $reason): void
+    {
+        $tid = trim($toolCallId);
+        if ($tid === '') {
+            return;
+        }
+
+        foreach ($this->segments as &$segment) {
+            if (($segment['kind'] ?? '') !== 'tools' || ! is_array($segment['tools'] ?? null)) {
+                continue;
+            }
+            foreach ($segment['tools'] as &$tool) {
+                if (($tool['toolCallId'] ?? '') !== $tid) {
+                    continue;
+                }
+                $tool['phase'] = 'rejected';
+                $tool['successful'] = false;
+                if ($reason !== null && trim($reason) !== '') {
+                    $tool['error'] = trim($reason);
+                }
+
+                return;
             }
         }
         unset($segment, $tool);
@@ -191,21 +216,6 @@ final class AdminAiOpsAssistantTimelineRecorder
                 $this->segments[] = ['kind' => 'text', 'text' => $tail];
             }
         }
-    }
-
-    private function shouldArchiveForNewModelSegment(string $prev, string $next): bool
-    {
-        if ($prev === '') {
-            return false;
-        }
-        if ($next === '') {
-            return true;
-        }
-        $shrinks = mb_strlen($next, 'UTF-8') < mb_strlen($prev, 'UTF-8');
-        $breaksPrefix = ! str_starts_with($next, $prev);
-        $suffixTruncate = $shrinks && $next !== '' && str_starts_with($prev, $next);
-
-        return ($breaksPrefix && ! $suffixTruncate) || ($shrinks && $next === '');
     }
 
     private function isStalePreToolDelta(string $accumulated): bool

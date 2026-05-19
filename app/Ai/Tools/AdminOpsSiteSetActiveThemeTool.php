@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Ai\Tools;
 
 use App\Services\Admin\AdminOps\AdminOpsSiteWriteService;
+use App\Services\Admin\AiOps\AdminAiOpsPendingWriteGuard;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Support\Arr;
 use Laravel\Ai\Contracts\Tool;
@@ -18,6 +19,7 @@ final class AdminOpsSiteSetActiveThemeTool implements Tool
 {
     public function __construct(
         private readonly AdminOpsSiteWriteService $siteWrite,
+        private readonly AdminAiOpsPendingWriteGuard $writeGuard,
     ) {}
 
     /**
@@ -35,7 +37,11 @@ final class AdminOpsSiteSetActiveThemeTool implements Tool
     {
         $themeId = trim((string) Arr::get($request->toArray(), 'theme_id', ''));
 
-        return json_encode($this->siteWrite->setActiveTheme($themeId), JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
+        return $this->writeGuard->runJson(
+            'AdminOpsSiteSetActiveThemeTool',
+            ['theme_id' => $themeId],
+            fn (): array => $this->siteWrite->setActiveTheme($themeId),
+        );
     }
 
     /**

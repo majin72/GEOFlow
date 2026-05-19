@@ -93,4 +93,7 @@ return [
         'ttl_seconds' => max(60, min(86400, (int) env('GEOFLOW_ADMIN_AI_OPS_TOOL_APPROVAL_TTL_SECONDS', 900))),
     ],
 
+    // AI 运维 SSE 工具原始输出截断上限（tool/done 的 raw_output）
+    'admin_ai_ops_sse_raw_output_max_bytes' => max(8192, min(2_097_152, (int) env('GEOFLOW_ADMIN_AI_OPS_SSE_RAW_OUTPUT_MAX_BYTES', 65536))),
+
 ];

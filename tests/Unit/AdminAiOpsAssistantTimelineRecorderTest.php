@@ -76,6 +76,31 @@ class AdminAiOpsAssistantTimelineRecorderTest extends TestCase
         $this->assertSame($recorder->toArray(), $restored->toArray());
     }
 
+    public function test_multi_tool_rounds_do_not_create_completed_rounds_fragments(): void
+    {
+        $recorder = new AdminAiOpsAssistantTimelineRecorder;
+        $recorder->applyDelta('好的，我先查一下当前站点的配置信息。');
+        $recorder->recordToolCalling('tc-info', 'AdminOpsSiteInfoTool', '{}');
+        $recorder->recordToolDone('tc-info', 'AdminOpsSiteInfoTool', true, '', '{"ok":true}');
+        $recorder->applyDelta("好的，我先查一下当前站点的配置信息。当前站点名称为「旧名」。");
+        $recorder->recordToolCalling('tc-patch', 'AdminOpsSitePatchBasicsTool', '{"site_name":"新名"}');
+        $recorder->markCallingToolsAwaitingApproval('pending');
+        $recorder->applyDelta('好的，根据工具返回结果，站点配置已经成功更新。');
+
+        $timeline = $recorder->toArray();
+
+        $this->assertSame([], $timeline['completedRounds']);
+        $this->assertGreaterThanOrEqual(3, count($timeline['segments']));
+        $plain = '';
+        foreach ($timeline['segments'] as $segment) {
+            if (($segment['kind'] ?? '') === 'text') {
+                $plain .= (string) ($segment['text'] ?? '');
+            }
+        }
+        $this->assertStringContainsString('已经成功更新', $plain);
+        $this->assertStringNotContainsString("当前\n\n好的，", $plain);
+    }
+
     public function test_legacy_waves_format_hydrates_to_segments(): void
     {
         $legacy = [

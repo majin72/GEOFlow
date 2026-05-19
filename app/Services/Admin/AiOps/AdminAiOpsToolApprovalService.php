@@ -60,6 +60,10 @@ class AdminAiOpsToolApprovalService
             $snapshot['partial_assistant_text'] = $partial;
             $snapshot['pending_approval_id'] = $approvalId;
             $snapshot['original_user_message'] = trim((string) ($run->input_text ?? ''));
+            $lastToolCallId = trim((string) $ctx->lastToolCallId);
+            if ($lastToolCallId !== '') {
+                $snapshot['last_tool_call_id'] = $lastToolCallId;
+            }
 
             AdminAiOpsToolApproval::query()->create([
                 'id' => $approvalId,
@@ -408,6 +412,7 @@ class AdminAiOpsToolApprovalService
             if (! is_array($patch)) {
                 return json_encode(['ok' => false, 'error' => 'patch 参数损坏。'], JSON_UNESCAPED_UNICODE) ?: '{}';
             }
+            $patch = $this->normalizeSitePatchKeys($patch);
 
             try {
                 $result = $this->siteWrite->patchBasics($patch);
@@ -417,6 +422,49 @@ class AdminAiOpsToolApprovalService
                     'error' => $e->getMessage(),
                 ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
             }
+
+            return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
+        }
+
+        if ($approval->tool_name === 'AdminOpsSiteSetActiveThemeTool') {
+            $result = $this->siteWrite->setActiveTheme(trim((string) ($decoded['theme_id'] ?? '')));
+
+            return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
+        }
+
+        if ($approval->tool_name === 'AdminOpsSiteSetArticleAdsTool') {
+            $ads = $decoded['ads'] ?? [];
+            if (! is_array($ads)) {
+                return json_encode(['ok' => false, 'error' => 'ads 参数损坏。'], JSON_UNESCAPED_UNICODE) ?: '{}';
+            }
+            $result = $this->siteWrite->setArticleDetailAds($ads);
+
+            return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
+        }
+
+        if ($approval->tool_name === 'AdminOpsArticleSearchPatchTool') {
+            $patch = $decoded['patch'] ?? [];
+            if (! is_array($patch)) {
+                return json_encode(['ok' => false, 'error' => 'patch 参数损坏。'], JSON_UNESCAPED_UNICODE) ?: '{}';
+            }
+            $result = $this->siteWrite->patchArticleSearch($patch);
+
+            return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
+        }
+
+        if ($approval->tool_name === 'AdminOpsExternalFetchPatchTool') {
+            $patch = $decoded['patch'] ?? [];
+            if (! is_array($patch)) {
+                return json_encode(['ok' => false, 'error' => 'patch 参数损坏。'], JSON_UNESCAPED_UNICODE) ?: '{}';
+            }
+            $result = $this->siteWrite->patchExternalFetch($patch);
+
+            return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
+        }
+
+        if ($approval->tool_name === 'AdminOpsSetDefaultEmbeddingModelTool') {
+            $modelId = (int) ($decoded['model_id'] ?? 0);
+            $result = $this->siteWrite->setDefaultEmbeddingModelId($modelId);
 
             return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
         }
@@ -491,5 +539,21 @@ class AdminAiOpsToolApprovalService
         if ((int) $approval->run_id !== $runId) {
             abort(404, '审批与执行轮次不匹配。');
         }
+    }
+
+    /**
+     * 将 site_title 规范为 site_name，避免审批执行时忽略标题字段。
+     *
+     * @param  array<string, mixed>  $patch
+     * @return array<string, mixed>
+     */
+    private function normalizeSitePatchKeys(array $patch): array
+    {
+        if (array_key_exists('site_title', $patch) && ! array_key_exists('site_name', $patch)) {
+            $patch['site_name'] = $patch['site_title'];
+        }
+        unset($patch['site_title']);
+
+        return $patch;
     }
 }

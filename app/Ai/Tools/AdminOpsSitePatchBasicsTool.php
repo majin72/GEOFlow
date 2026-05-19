@@ -53,6 +53,8 @@ final class AdminOpsSitePatchBasicsTool implements Tool
             return json_encode(['ok' => false, 'error' => 'patch_json 必须解析为 JSON 对象。'], JSON_UNESCAPED_UNICODE) ?: '{}';
         }
 
+        $decoded = $this->normalizePatchKeys($decoded);
+
         $risk = $this->aiOpsRisk->evaluate('AdminOpsSitePatchBasicsTool', [
             'patch' => $decoded,
         ]);
@@ -76,7 +78,23 @@ final class AdminOpsSitePatchBasicsTool implements Tool
     {
         return [
             'patch_json' => $schema->string()
-                ->description('要合并写入的字段 JSON 对象（字符串）。可含：site_name, site_subtitle, site_description, site_keywords, copyright_info, site_icp_beian, site_police_beian, site_police_beian_code, site_logo, site_favicon, analytics_code, seo_title_template, seo_description_template, featured_limit, per_page, home_carousel_slides（数组或 JSON 字符串）, admin_base_path。'),
+                ->description('要合并写入的字段 JSON 对象（字符串）。可含：site_name（站点名称/标题，勿用 site_title）, site_subtitle, site_description, site_keywords, copyright_info, site_icp_beian, site_police_beian, site_police_beian_code, site_logo, site_favicon, analytics_code, seo_title_template, seo_description_template, featured_limit, per_page, home_carousel_slides（数组或 JSON 字符串）, admin_base_path。'),
         ];
+    }
+
+    /**
+     * 将模型常见别名规范为写入服务识别的键（site_title → site_name）。
+     *
+     * @param  array<string, mixed>  $patch
+     * @return array<string, mixed>
+     */
+    private function normalizePatchKeys(array $patch): array
+    {
+        if (array_key_exists('site_title', $patch) && ! array_key_exists('site_name', $patch)) {
+            $patch['site_name'] = $patch['site_title'];
+        }
+        unset($patch['site_title']);
+
+        return $patch;
     }
 }

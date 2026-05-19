@@ -151,6 +151,65 @@ class AdminAiOpsToolApprovalTest extends TestCase
         $this->assertStringContainsString('"ok"', $out);
     }
 
+    public function test_approve_site_patch_with_site_title_alias_writes_site_name(): void
+    {
+        $this->withoutMiddleware(ValidateCsrfToken::class);
+
+        $base = AdminWeb::basePath();
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'site_name'],
+            ['setting_value' => 'BeforeTitleAlias']
+        );
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'admin_base_path'],
+            ['setting_value' => $base]
+        );
+
+        $admin = $this->createAdmin();
+        $session = AdminAiOpsSession::query()->create([
+            'admin_id' => (int) $admin->id,
+            'title' => 'site_title 别名',
+        ]);
+
+        $run = AdminAiOpsRun::query()->create([
+            'session_id' => (int) $session->id,
+            'admin_id' => (int) $admin->id,
+            'ai_model_id' => $this->createAiModel()->id,
+            'status' => 'awaiting_confirmation',
+            'input_text' => '改标题',
+            'plan_stream_snapshot' => ['partial_assistant_text' => ''],
+        ]);
+
+        $approvalId = (string) Str::uuid();
+        $args = ['patch' => ['site_title' => '床车旅行记']];
+        $encoded = json_encode($args, JSON_THROW_ON_ERROR);
+
+        AdminAiOpsToolApproval::query()->create([
+            'id' => $approvalId,
+            'run_id' => (int) $run->id,
+            'admin_id' => (int) $admin->id,
+            'tool_name' => 'AdminOpsSitePatchBasicsTool',
+            'arguments_json' => $encoded,
+            'args_fingerprint' => hash('sha256', $encoded),
+            'risk_label' => 'site_patch_basics:site_title',
+            'status' => 'pending',
+            'expires_at' => now()->addHour(),
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->postJson(route('admin.ai-ops.runs.tool-approvals.approve', [
+                'runId' => $run->id,
+                'approvalId' => $approvalId,
+            ]))
+            ->assertOk()
+            ->assertJsonPath('executed_this_request', true);
+
+        $this->assertSame(
+            '床车旅行记',
+            SiteSetting::query()->where('setting_key', 'site_name')->value('setting_value')
+        );
+    }
+
     public function test_reject_then_resume_stream_completes_run_with_summary(): void
     {
         $this->withoutMiddleware(ValidateCsrfToken::class);
