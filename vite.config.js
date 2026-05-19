@@ -9,6 +9,7 @@ export default defineConfig({
                 'resources/css/app.css',
                 'resources/js/app.js',
                 'resources/js/admin-article-preview.js',
+                'resources/js/admin-ai-ops.js',
             ],
             refresh: true,
         }),

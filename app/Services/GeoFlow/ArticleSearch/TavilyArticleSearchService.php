@@ -20,7 +20,7 @@ class TavilyArticleSearchService
     ) {}
 
     /**
-     * 当前配置是否可用于搜索。
+     * 当前配置是否可用于文章生成等场景（需站点总开关 + API Key）。
      */
     public function isEnabled(): bool
     {
@@ -28,16 +28,30 @@ class TavilyArticleSearchService
     }
 
     /**
-     * 执行搜索并返回给模型可读的资料块。
+     * AI 运维等场景：仅要求已配置 Tavily API Key，不校验站点 article_search_enabled。
      */
-    public function search(string $query): string
+    public function isEnabledForAiOps(): bool
+    {
+        return $this->config->hasApiKeyConfigured();
+    }
+
+    /**
+     * 执行搜索并返回给模型可读的资料块。
+     *
+     * @param  bool  $forAiOps  为 true 时不校验站点「文章联网搜索」总开关，仅要求 API Key 已配置
+     */
+    public function search(string $query, bool $forAiOps = false): string
     {
         $query = $this->normalizeQuery($query);
         if ($query === '') {
             return '搜索查询为空，未执行联网搜索。';
         }
 
-        if (! $this->isEnabled()) {
+        if ($forAiOps) {
+            if (! $this->isEnabledForAiOps()) {
+                return 'Tavily API Key 未配置。请在后台「网站设置 → 文章联网搜索」中填写 API Key 后，再在 AI 运维中勾选联网模式。';
+            }
+        } elseif (! $this->isEnabled()) {
             return '联网搜索未启用或 Tavily API Key 未配置。';
         }
 

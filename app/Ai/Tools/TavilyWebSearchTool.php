@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Ai\Tools;
 
+use App\Services\Admin\AiOps\AdminAiOpsStreamContext;
 use App\Services\GeoFlow\ArticleSearch\TavilyArticleSearchService;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Laravel\Ai\Contracts\Tool;
@@ -36,7 +37,9 @@ class TavilyWebSearchTool implements Tool
     public function handle(Request $request): Stringable|string
     {
         try {
-            return $this->searchService->search((string) $request->string('query'));
+            $forAiOps = app()->bound(AdminAiOpsStreamContext::class);
+
+            return $this->searchService->search((string) $request->string('query'), $forAiOps);
         } catch (Throwable $exception) {
             return '联网搜索暂不可用：'.$exception->getMessage();
         }

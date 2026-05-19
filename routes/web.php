@@ -191,6 +191,7 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
             Route::get('sessions', [AdminAiOpsController::class, 'sessions'])->name('sessions.index');
             Route::post('sessions', [AdminAiOpsController::class, 'createSession'])->name('sessions.store');
             Route::get('sessions/{sessionId}', [AdminAiOpsController::class, 'showSession'])->name('sessions.show')->whereNumber('sessionId');
+            Route::delete('sessions/{sessionId}', [AdminAiOpsController::class, 'destroySession'])->name('sessions.destroy')->whereNumber('sessionId');
             Route::post('chat', [AdminAiOpsController::class, 'chat'])->name('chat');
             Route::get('runs/{runId}/stream', [AdminAiOpsController::class, 'stream'])->name('runs.stream')->whereNumber('runId');
             Route::get('runs/{runId}/resume-stream', [AdminAiOpsController::class, 'resumeStream'])->name('runs.resume-stream')->whereNumber('runId');

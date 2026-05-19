@@ -25,6 +25,18 @@ class AdminAiOpsRunTest extends TestCase
             ->assertSee('AI 运维');
     }
 
+    public function test_ai_ops_page_shows_web_search_configure_hint_when_api_key_missing(): void
+    {
+        $admin = $this->createAdmin();
+        $this->createAiModel();
+
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.ai-ops.index'))
+            ->assertOk()
+            ->assertSee(__('admin.ai_ops.network_mode_unconfigured'), false)
+            ->assertSee(__('admin.ai_ops.network_mode_configure_link'), false);
+    }
+
     public function test_admin_can_list_and_show_only_owned_sessions(): void
     {
         $this->withoutMiddleware(ValidateCsrfToken::class);
@@ -56,6 +68,36 @@ class AdminAiOpsRunTest extends TestCase
         $this->actingAs($admin, 'admin')
             ->getJson(route('admin.ai-ops.sessions.show', ['sessionId' => $otherSession->id]))
             ->assertNotFound();
+    }
+
+    public function test_admin_can_delete_owned_session(): void
+    {
+        $this->withoutMiddleware(ValidateCsrfToken::class);
+        $admin = $this->createAdmin();
+        $otherAdmin = $this->createAdmin();
+        $ownedSession = AdminAiOpsSession::query()->create([
+            'admin_id' => (int) $admin->id,
+            'title' => '待删除会话',
+        ]);
+        $otherSession = AdminAiOpsSession::query()->create([
+            'admin_id' => (int) $otherAdmin->id,
+            'title' => '他人会话',
+        ]);
+        $this->createRunInSession($ownedSession, $admin, 'completed', $this->createAiModel());
+
+        $this->actingAs($admin, 'admin')
+            ->deleteJson(route('admin.ai-ops.sessions.destroy', ['sessionId' => $ownedSession->id]))
+            ->assertOk()
+            ->assertJsonPath('ok', true);
+
+        $this->assertDatabaseMissing('admin_ai_ops_sessions', ['id' => $ownedSession->id]);
+        $this->assertDatabaseMissing('admin_ai_ops_runs', ['session_id' => $ownedSession->id]);
+
+        $this->actingAs($admin, 'admin')
+            ->deleteJson(route('admin.ai-ops.sessions.destroy', ['sessionId' => $otherSession->id]))
+            ->assertNotFound();
+
+        $this->assertDatabaseHas('admin_ai_ops_sessions', ['id' => $otherSession->id]);
     }
 
     public function test_post_chat_creates_queued_run(): void

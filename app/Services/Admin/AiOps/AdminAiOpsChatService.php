@@ -120,6 +120,7 @@ class AdminAiOpsChatService
         Closure $onTextAccumulated,
         ?Closure $onRawModelStreamEvent = null,
         ?Closure $onLlmStreamFinished = null,
+        bool $webSearchEnabled = false,
     ): string {
         return $this->streamAssistantWithPriorAgent(
             currentUserMessage: $currentUserMessage,
@@ -128,6 +129,7 @@ class AdminAiOpsChatService
             onTextAccumulated: $onTextAccumulated,
             onRawModelStreamEvent: $onRawModelStreamEvent,
             onLlmStreamFinished: $onLlmStreamFinished,
+            webSearchEnabled: $webSearchEnabled,
         );
     }
 
@@ -146,6 +148,7 @@ class AdminAiOpsChatService
         Closure $onTextAccumulated,
         ?Closure $onRawModelStreamEvent = null,
         ?Closure $onLlmStreamFinished = null,
+        bool $webSearchEnabled = false,
     ): string {
         $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
         $partial = trim((string) ($snapshot['partial_assistant_text'] ?? ''));
@@ -188,6 +191,7 @@ class AdminAiOpsChatService
             onTextAccumulated: $onTextAccumulated,
             onRawModelStreamEvent: $onRawModelStreamEvent,
             onLlmStreamFinished: $onLlmStreamFinished,
+            webSearchEnabled: $webSearchEnabled,
         );
     }
 
@@ -209,6 +213,7 @@ class AdminAiOpsChatService
         Closure $onTextAccumulated,
         ?Closure $onRawModelStreamEvent = null,
         ?Closure $onLlmStreamFinished = null,
+        bool $webSearchEnabled = false,
     ): string {
         $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
         $partial = trim((string) ($snapshot['partial_assistant_text'] ?? ''));
@@ -232,7 +237,18 @@ class AdminAiOpsChatService
             onTextAccumulated: $onTextAccumulated,
             onRawModelStreamEvent: $onRawModelStreamEvent,
             onLlmStreamFinished: $onLlmStreamFinished,
+            webSearchEnabled: $webSearchEnabled,
         );
+    }
+
+    /**
+     * 从 run 的 plan_stream_snapshot 读取本轮是否启用联网搜索（Tavily）。
+     */
+    public function runWebSearchEnabled(AdminAiOpsRun $run): bool
+    {
+        $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
+
+        return (bool) ($snapshot['web_search_enabled'] ?? false);
     }
 
     /**
@@ -247,6 +263,7 @@ class AdminAiOpsChatService
         Closure $onTextAccumulated,
         ?Closure $onRawModelStreamEvent,
         ?Closure $onLlmStreamFinished,
+        bool $webSearchEnabled = false,
     ): string {
         $providerUrl = OpenAiRuntimeProvider::resolveChatBaseUrl((string) ($aiModel->api_url ?? ''));
         $apiKey = $this->apiKeyCrypto->decrypt((string) ($aiModel->getRawOriginal('api_key') ?? ''));
@@ -259,20 +276,24 @@ class AdminAiOpsChatService
         $driver = OpenAiRuntimeProvider::resolveChatDriver($providerUrl, $modelId);
         $providerName = OpenAiRuntimeProvider::registerProvider('admin_ai_ops_chat', $driver, $providerUrl, $apiKey);
 
+        $tools = [
+            $this->siteInfoTool,
+            $this->listThemesTool,
+            $this->listCategoriesTool,
+            $this->adminActionTool,
+            $this->sitePatchBasicsTool,
+            $this->siteSetActiveThemeTool,
+            $this->siteSetArticleAdsTool,
+            $this->articleSearchPatchTool,
+            $this->externalFetchPatchTool,
+            $this->setDefaultEmbeddingModelTool,
+        ];
+        if ($webSearchEnabled) {
+            $tools[] = $this->tavilyWebSearchTool;
+        }
+
         $agent = new AdminAiOpsChatAgent(
-            tools: [
-                $this->siteInfoTool,
-                $this->listThemesTool,
-                $this->listCategoriesTool,
-                $this->adminActionTool,
-                $this->sitePatchBasicsTool,
-                $this->siteSetActiveThemeTool,
-                $this->siteSetArticleAdsTool,
-                $this->articleSearchPatchTool,
-                $this->externalFetchPatchTool,
-                $this->tavilyWebSearchTool,
-                $this->setDefaultEmbeddingModelTool,
-            ],
+            tools: $tools,
             priorConversationMessages: $priorConversationMessages,
         );
         $stream = $agent->stream($currentUserMessage, [], $providerName, $modelId);

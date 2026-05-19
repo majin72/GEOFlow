@@ -79,6 +79,36 @@ class TavilyArticleSearchServiceTest extends TestCase
         $this->assertStringContainsString('未启用', $service->search('床车旅行'));
     }
 
+    public function test_search_for_ai_ops_ignores_site_enabled_flag_when_key_present(): void
+    {
+        Http::fake([
+            self::ENDPOINT => Http::response([
+                'results' => [
+                    [
+                        'title' => 'AI Ops Result',
+                        'url' => 'https://example.com/ai-ops',
+                        'content' => 'ok',
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $service = $this->makeService(['enabled' => false, 'cacheTtl' => 0]);
+        $result = $service->search('床车旅行', forAiOps: true);
+
+        $this->assertStringContainsString('AI Ops Result', $result);
+        Http::assertSentCount(1);
+    }
+
+    public function test_search_for_ai_ops_returns_key_message_when_api_key_missing(): void
+    {
+        $service = $this->makeService(['enabled' => true, 'apiKey' => '']);
+
+        $result = $service->search('床车旅行', forAiOps: true);
+
+        $this->assertStringContainsString('API Key 未配置', $result);
+    }
+
     /**
      * @param  array<string,mixed>  $overrides
      */

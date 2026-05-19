@@ -151,6 +151,13 @@ class AdminAiOpsRunService
             }
         }
 
+        $assistantTimeline = null;
+        $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
+        $timelineRaw = $snapshot['assistant_timeline'] ?? null;
+        if (is_array($timelineRaw) && $this->timelinePayloadHasDisplayableContent($timelineRaw)) {
+            $assistantTimeline = $timelineRaw;
+        }
+
         return [
             'id' => (int) $run->id,
             'session_id' => (int) $run->session_id,
@@ -164,6 +171,7 @@ class AdminAiOpsRunService
             'can_cancel' => in_array((string) $run->status, ['queued', 'processing'], true),
             'approval_pending' => $approvalPending,
             'assistant_partial_preview' => $assistantPartialPreview,
+            'assistant_timeline' => $assistantTimeline,
             'steps' => $run->steps->map(fn (AdminAiOpsStep $step): array => [
                 'id' => (int) $step->id,
                 'position' => (int) $step->position,
@@ -184,6 +192,22 @@ class AdminAiOpsRunService
                 'size' => (int) $attachment->size,
             ])->values()->all(),
         ];
+    }
+
+    /**
+     * 将助手时间线写入 plan_stream_snapshot（刷新后可还原工具卡片）。
+     *
+     * @param  array<string, mixed>  $timeline
+     */
+    public function persistAssistantTimeline(AdminAiOpsRun $run, array $timeline): AdminAiOpsRun
+    {
+        $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
+        $snapshot['assistant_timeline'] = $timeline;
+
+        $run->forceFill(['plan_stream_snapshot' => $snapshot])->save();
+        $run->session()->touch();
+
+        return $run->fresh(['steps', 'attachments', 'aiModel']) ?? $run;
     }
 
     public function broadcast(AdminAiOpsRun $run): void
@@ -233,5 +257,47 @@ class AdminAiOpsRunService
         $chunks[] = (string) $row->tool_name;
 
         return Str::limit(implode(' · ', array_filter($chunks)), 220, '…');
+    }
+
+    /**
+     * 时间线是否含可展示段（避免下发空壳 assistant_timeline 阻断前端回退到 result_summary）。
+     *
+     * @param  array<string, mixed>  $timeline
+     */
+    private function timelinePayloadHasDisplayableContent(array $timeline): bool
+    {
+        if ($this->segmentListHasDisplayableContent(is_array($timeline['segments'] ?? null) ? $timeline['segments'] : [])) {
+            return true;
+        }
+
+        $rounds = is_array($timeline['completedRounds'] ?? null) ? $timeline['completedRounds'] : [];
+        foreach ($rounds as $round) {
+            if (! is_array($round)) {
+                continue;
+            }
+            if ($this->segmentListHasDisplayableContent(is_array($round['segments'] ?? null) ? $round['segments'] : [])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $segments
+     */
+    private function segmentListHasDisplayableContent(array $segments): bool
+    {
+        foreach ($segments as $segment) {
+            $kind = (string) ($segment['kind'] ?? '');
+            if ($kind === 'text' && trim((string) ($segment['text'] ?? '')) !== '') {
+                return true;
+            }
+            if ($kind === 'tools' && is_array($segment['tools'] ?? null) && $segment['tools'] !== []) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

@@ -77,12 +77,19 @@ final class ArticleSearchConfig
     }
 
     /**
-     * 判断当前配置是否足以执行搜索。
+     * 判断当前配置是否足以执行搜索（文章生成等需同时开启 {@see $enabled}）。
      */
     public function isUsable(): bool
     {
-        return $this->enabled
-            && $this->provider === self::DEFAULT_PROVIDER
+        return $this->enabled && $this->hasApiKeyConfigured();
+    }
+
+    /**
+     * 是否已配置 Tavily API Key（与站点「文章联网搜索」总开关无关，供 AI 运维等场景使用）。
+     */
+    public function hasApiKeyConfigured(): bool
+    {
+        return $this->provider === self::DEFAULT_PROVIDER
             && $this->endpoint !== ''
             && $this->apiKey !== '';
     }

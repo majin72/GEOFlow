@@ -13,6 +13,7 @@ use App\Services\Admin\AiOps\AdminAiOpsRunService;
 use App\Services\Admin\AiOps\AdminAiOpsStreamContext;
 use App\Services\Admin\AiOps\AdminAiOpsToolApprovalService;
 use App\Services\Admin\AiOps\Exceptions\AdminAiOpsToolApprovalPendingException;
+use App\Services\GeoFlow\ArticleSearch\ArticleSearchConfig;
 use App\Support\AdminWeb;
 use App\Support\GeoFlow\OpenAiRuntimeProvider;
 use Illuminate\Http\JsonResponse;
@@ -28,7 +29,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 use Throwable;
 
 /**
- * 后台 AI 运维：POST 创建排队 run；GET（EventSource）流式拉取模型输出并完成落库。
+ * 后台 AI 运维：会话管理、对话创建与流式输出。
  */
 class AdminAiOpsController extends Controller
 {
@@ -37,11 +38,15 @@ class AdminAiOpsController extends Controller
      */
     public function index(): View
     {
+        $articleSearchConfig = ArticleSearchConfig::fromSettings();
+
         return view('admin.ai-ops.index', [
             'pageTitle' => __('admin.ai_ops.page_title'),
             'activeMenu' => 'ai_ops',
             'adminSiteName' => AdminWeb::siteName(),
             'models' => $this->availableChatModels(),
+            'webSearchKeyConfigured' => $articleSearchConfig->hasApiKeyConfigured(),
+            'articleSearchSettingsUrl' => route('admin.site-settings.article-search'),
         ]);
     }
 
@@ -108,6 +113,17 @@ class AdminAiOpsController extends Controller
     }
 
     /**
+     * 删除指定会话及其关联 runs（数据库级联删除）。
+     */
+    public function destroySession(Request $request, int $sessionId): JsonResponse
+    {
+        $session = $this->findOwnedSession($request, $sessionId);
+        $session->delete();
+
+        return response()->json(['ok' => true]);
+    }
+
+    /**
      * 创建一条待流式补全的 run（status=queued）；客户端随后用 EventSource 打开 {@see stream}。
      */
     public function chat(Request $request, AdminAiOpsRunService $runs): JsonResponse
@@ -116,6 +132,7 @@ class AdminAiOpsController extends Controller
             'message' => ['required', 'string', 'max:8000'],
             'ai_model_id' => ['required', 'integer', 'exists:ai_models,id'],
             'session_id' => ['nullable', 'integer', 'exists:admin_ai_ops_sessions,id'],
+            'web_search_enabled' => ['sometimes', 'boolean'],
         ]);
 
         /** @var Admin $admin */
@@ -135,12 +152,15 @@ class AdminAiOpsController extends Controller
 
         $modelId = $this->resolveAiModelId((int) $payload['ai_model_id']);
 
+        $webSearchEnabled = (bool) ($payload['web_search_enabled'] ?? false);
+
         $run = AdminAiOpsRun::query()->create([
             'session_id' => (int) $session->id,
             'admin_id' => (int) $admin->id,
             'ai_model_id' => $modelId,
             'status' => 'queued',
             'input_text' => $message,
+            'plan_stream_snapshot' => ['web_search_enabled' => $webSearchEnabled],
         ]);
 
         $session->touch();
@@ -242,8 +262,16 @@ class AdminAiOpsController extends Controller
                 $deadline = microtime(true) + $maxSeconds;
 
                 $haltedForApproval = false;
+                $webSearchEnabled = $chat->runWebSearchEnabled($run);
 
-                app()->instance(AdminAiOpsStreamContext::class, new AdminAiOpsStreamContext((int) $run->id, $adminId));
+                app()->instance(
+                    AdminAiOpsStreamContext::class,
+                    AdminAiOpsStreamContext::forRun(
+                        (int) $run->id,
+                        $adminId,
+                        is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : null,
+                    ),
+                );
                 try {
                     try {
                         $assistantText = $chat->streamAssistantReply(
@@ -263,6 +291,7 @@ class AdminAiOpsController extends Controller
                                 $this->emitAdminAiOpsSseFromAiStreamEvent($event);
                             },
                             null,
+                            $webSearchEnabled,
                         );
 
                         $assistantText = trim((string) $assistantText);
@@ -274,6 +303,7 @@ class AdminAiOpsController extends Controller
                         $run = $runs->updateRun($run->fresh() ?? $run, [
                             'status' => 'completed',
                             'result_summary' => $assistantText,
+                            'plan_stream_snapshot' => $this->planStreamSnapshotWithTimeline($run->fresh() ?? $run),
                             'finished_at' => now(),
                         ]);
                     } catch (AdminAiOpsToolApprovalPendingException $e) {
@@ -283,6 +313,13 @@ class AdminAiOpsController extends Controller
                             ->whereKey($runId)
                             ->with(['steps', 'attachments', 'aiModel'])
                             ->first();
+
+                        if ($freshRun instanceof AdminAiOpsRun && app()->bound(AdminAiOpsStreamContext::class)) {
+                            $runs->persistAssistantTimeline(
+                                $freshRun,
+                                app(AdminAiOpsStreamContext::class)->timeline->toArray(),
+                            );
+                        }
 
                         $this->writeAdminAiOpsSseJsonEvent('approval_required', [
                             'approval_id' => $e->approvalId,
@@ -298,6 +335,7 @@ class AdminAiOpsController extends Controller
                         $run = $runs->updateRun($run->fresh() ?? $run, [
                             'status' => 'failed',
                             'error_message' => $human !== '' ? $human : trim($e->getMessage()),
+                            'plan_stream_snapshot' => $this->planStreamSnapshotWithTimeline($run->fresh() ?? $run),
                             'finished_at' => now(),
                         ]);
                     }
@@ -497,8 +535,16 @@ class AdminAiOpsController extends Controller
                 $priorMessages = $chat->priorMessagesBeforeRun((int) $run->session_id, (int) $run->id);
                 $providerUrl = OpenAiRuntimeProvider::resolveChatBaseUrl((string) ($aiModel->api_url ?? ''));
                 $deadline = microtime(true) + $maxSeconds;
+                $webSearchEnabled = $chat->runWebSearchEnabled($run);
 
-                app()->instance(AdminAiOpsStreamContext::class, new AdminAiOpsStreamContext((int) $run->id, $adminId));
+                app()->instance(
+                    AdminAiOpsStreamContext::class,
+                    AdminAiOpsStreamContext::forRun(
+                        (int) $run->id,
+                        $adminId,
+                        is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : null,
+                    ),
+                );
                 try {
                     if ($decision === 'approve') {
                         $assistantText = $chat->streamAssistantResumeAfterApproval(
@@ -518,6 +564,7 @@ class AdminAiOpsController extends Controller
                                 $this->emitAdminAiOpsSseFromAiStreamEvent($event);
                             },
                             null,
+                            $webSearchEnabled,
                         );
                     } else {
                         $assistantText = $chat->streamAssistantResumeAfterReject(
@@ -540,6 +587,7 @@ class AdminAiOpsController extends Controller
                                 $this->emitAdminAiOpsSseFromAiStreamEvent($event);
                             },
                             null,
+                            $webSearchEnabled,
                         );
                     }
 
@@ -554,6 +602,7 @@ class AdminAiOpsController extends Controller
                     $run = $runs->updateRun($snapshotRun, [
                         'status' => 'completed',
                         'result_summary' => $mergedSummary,
+                        'plan_stream_snapshot' => $this->planStreamSnapshotWithTimeline($snapshotRun),
                         'finished_at' => now(),
                     ]);
                 } catch (Throwable $e) {
@@ -561,6 +610,7 @@ class AdminAiOpsController extends Controller
                     $run = $runs->updateRun($run->fresh() ?? $run, [
                         'status' => 'failed',
                         'error_message' => $human !== '' ? $human : trim($e->getMessage()),
+                        'plan_stream_snapshot' => $this->planStreamSnapshotWithTimeline($run->fresh() ?? $run),
                         'finished_at' => now(),
                     ]);
                 } finally {
@@ -738,13 +788,16 @@ class AdminAiOpsController extends Controller
             return;
         }
 
+        $preview = (string) __('admin.ai_ops.tool_pending_approval_result_preview');
+        app(AdminAiOpsStreamContext::class)->timeline->markCallingToolsDoneForPendingApproval($preview);
+
         $this->writeAdminAiOpsSseJsonEvent('tool', [
             'phase' => 'done',
             'tool_call_id' => $lastId,
             'tool_name' => $e->toolName,
             'successful' => true,
             'error' => '',
-            'result_preview' => (string) __('admin.ai_ops.tool_pending_approval_result_preview'),
+            'result_preview' => $preview,
         ]);
     }
 
@@ -765,7 +818,13 @@ class AdminAiOpsController extends Controller
 
         if ($event instanceof AiStreamToolCall) {
             if (app()->bound(AdminAiOpsStreamContext::class)) {
-                app(AdminAiOpsStreamContext::class)->lastToolCallId = (string) $event->toolCall->id;
+                $ctx = app(AdminAiOpsStreamContext::class);
+                $ctx->lastToolCallId = (string) $event->toolCall->id;
+                $ctx->timeline->recordToolCalling(
+                    (string) $event->toolCall->id,
+                    (string) $event->toolCall->name,
+                    $this->adminAiOpsSseEncodeJsonPreview($event->toolCall->arguments, 1200) ?? '',
+                );
             }
             $this->writeAdminAiOpsSseJsonEvent('tool', [
                 'phase' => 'calling',
@@ -778,13 +837,23 @@ class AdminAiOpsController extends Controller
         }
 
         if ($event instanceof AiStreamToolResult) {
+            $resultPreview = $this->adminAiOpsSseToolResultDataPreview($event->toolResult->result);
+            if (app()->bound(AdminAiOpsStreamContext::class)) {
+                app(AdminAiOpsStreamContext::class)->timeline->recordToolDone(
+                    (string) $event->toolResult->id,
+                    (string) $event->toolResult->name,
+                    (bool) $event->successful,
+                    (string) ($event->error ?? ''),
+                    $resultPreview,
+                );
+            }
             $this->writeAdminAiOpsSseJsonEvent('tool', [
                 'phase' => 'done',
                 'tool_call_id' => $event->toolResult->id,
                 'tool_name' => $event->toolResult->name,
                 'successful' => $event->successful,
                 'error' => $event->error,
-                'result_preview' => $this->adminAiOpsSseToolResultDataPreview($event->toolResult->result),
+                'result_preview' => $resultPreview,
             ]);
             $this->writeAdminAiOpsSseJsonEvent('stream_status', [
                 'kind' => 'post_tool_model_round',
@@ -887,5 +956,20 @@ class AdminAiOpsController extends Controller
         echo "event: done\n";
         echo "data: {}\n\n";
         $this->flushAdminAiOpsSseOutput();
+    }
+
+    /**
+     * 合并当前 SSE 上下文中的助手时间线到 plan_stream_snapshot（保留 web_search_enabled 等既有字段）。
+     *
+     * @return array<string, mixed>
+     */
+    private function planStreamSnapshotWithTimeline(AdminAiOpsRun $run): array
+    {
+        $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
+        if (app()->bound(AdminAiOpsStreamContext::class)) {
+            $snapshot['assistant_timeline'] = app(AdminAiOpsStreamContext::class)->timeline->toArray();
+        }
+
+        return $snapshot;
     }
 }
