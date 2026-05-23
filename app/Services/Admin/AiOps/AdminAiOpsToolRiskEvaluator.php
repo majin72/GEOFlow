@@ -1,14 +1,20 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services\Admin\AiOps;
 
 /**
  * 判断 AI 运维工具调用是否必须先经用户确认。
  *
- * 写库、Shell、集成 patch 等变更类工具需审批；只读工具（含工作区 Read/Grep/Glob）无需审批。
+ * 写库、集成 patch 等变更类工具需审批；只读工具无需审批。
  */
 final class AdminAiOpsToolRiskEvaluator
 {
+    public function __construct(
+        private readonly AdminAiOpsApprovedToolExecutor $approvedToolExecutor,
+    ) {}
+
     /**
      * 若需要审批则返回非空风险标签（用于摘要）；不需要则返回 null。
      *
@@ -67,17 +73,32 @@ final class AdminAiOpsToolRiskEvaluator
             return 'set_default_embedding:model_id='.(string) ($arguments['model_id'] ?? 0);
         }
 
-        if ($toolName !== 'AdminOpsAdminActionTool') {
-            return null;
+        if ($this->approvedToolExecutor->isMirrorWriteTool($toolName)) {
+            $op = trim((string) ($arguments['op'] ?? ''));
+
+            return $this->mirrorWriteRiskLabel($toolName, $op, $arguments);
         }
 
-        $kind = strtolower(trim((string) ($arguments['kind'] ?? '')));
-        if ($kind !== 'write') {
-            return null;
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $arguments
+     */
+    private function mirrorWriteRiskLabel(string $toolName, string $op, array $arguments): string
+    {
+        $short = str_replace('AdminOps', '', str_replace('Tool', '', $toolName));
+        $short = strtolower(preg_replace('/([a-z])([A-Z])/', '$1_$2', $short) ?? $short);
+        $preview = '';
+        $payload = $arguments['payload'] ?? [];
+        if (is_array($payload)) {
+            if (isset($payload['name'])) {
+                $preview = ':'.mb_substr(trim((string) $payload['name']), 0, 24);
+            } elseif (isset($payload['task_name'])) {
+                $preview = ':'.mb_substr(trim((string) $payload['task_name']), 0, 24);
+            }
         }
 
-        $op = trim((string) ($arguments['op'] ?? ''));
-
-        return 'admin_write:'.($op !== '' ? $op : '(unknown_op)');
+        return $short.':'.($op !== '' ? $op : 'write').$preview;
     }
 }

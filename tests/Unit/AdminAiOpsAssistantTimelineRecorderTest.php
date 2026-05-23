@@ -84,7 +84,7 @@ class AdminAiOpsAssistantTimelineRecorderTest extends TestCase
         $recorder->recordToolDone('tc-info', 'AdminOpsSiteInfoTool', true, '', '{"ok":true}');
         $recorder->applyDelta("好的，我先查一下当前站点的配置信息。当前站点名称为「旧名」。");
         $recorder->recordToolCalling('tc-patch', 'AdminOpsSitePatchBasicsTool', '{"site_name":"新名"}');
-        $recorder->markCallingToolsAwaitingApproval('pending');
+        $recorder->markToolAwaitingApprovalByCallId('tc-patch', 'pending');
         $recorder->applyDelta('好的，根据工具返回结果，站点配置已经成功更新。');
 
         $timeline = $recorder->toArray();

@@ -3,17 +3,28 @@
 namespace App\Services\Admin\AiOps;
 
 use App\Ai\Agents\AdminAiOpsChatAgent;
-use App\Ai\Tools\AdminOpsAdminActionTool;
+use App\Ai\Tools\AdminOpsAiConfigTool;
 use App\Ai\Tools\AdminOpsArticleSearchPatchTool;
+use App\Ai\Tools\AdminOpsArticlesTool;
+use App\Ai\Tools\AdminOpsAuthorsTool;
+use App\Ai\Tools\AdminOpsCategoryWriteTool;
+use App\Ai\Tools\AdminOpsDashboardTool;
 use App\Ai\Tools\AdminOpsExternalFetchPatchTool;
 use App\Ai\Tools\AdminOpsFetchUrlTool;
+use App\Ai\Tools\AdminOpsImageLibrariesTool;
+use App\Ai\Tools\AdminOpsKeywordLibrariesTool;
+use App\Ai\Tools\AdminOpsKnowledgeBasesTool;
 use App\Ai\Tools\AdminOpsListCategoriesTool;
 use App\Ai\Tools\AdminOpsListThemesTool;
+use App\Ai\Tools\AdminOpsSensitiveWordsTool;
 use App\Ai\Tools\AdminOpsSetDefaultEmbeddingModelTool;
 use App\Ai\Tools\AdminOpsSiteInfoTool;
 use App\Ai\Tools\AdminOpsSitePatchBasicsTool;
 use App\Ai\Tools\AdminOpsSiteSetActiveThemeTool;
 use App\Ai\Tools\AdminOpsSiteSetArticleAdsTool;
+use App\Ai\Tools\AdminOpsTasksTool;
+use App\Ai\Tools\AdminOpsTitleLibrariesTool;
+use App\Ai\Tools\AdminOpsUrlImportTool;
 use App\Ai\Tools\TavilyWebSearchTool;
 use App\Models\AdminAiOpsRun;
 use App\Models\AdminAiOpsToolApproval;
@@ -46,7 +57,18 @@ class AdminAiOpsChatService
         private readonly AdminOpsSiteInfoTool $siteInfoTool,
         private readonly AdminOpsListThemesTool $listThemesTool,
         private readonly AdminOpsListCategoriesTool $listCategoriesTool,
-        private readonly AdminOpsAdminActionTool $adminActionTool,
+        private readonly AdminOpsDashboardTool $dashboardTool,
+        private readonly AdminOpsSensitiveWordsTool $sensitiveWordsTool,
+        private readonly AdminOpsTasksTool $tasksTool,
+        private readonly AdminOpsCategoryWriteTool $categoryWriteTool,
+        private readonly AdminOpsArticlesTool $articlesTool,
+        private readonly AdminOpsAuthorsTool $authorsTool,
+        private readonly AdminOpsKeywordLibrariesTool $keywordLibrariesTool,
+        private readonly AdminOpsTitleLibrariesTool $titleLibrariesTool,
+        private readonly AdminOpsImageLibrariesTool $imageLibrariesTool,
+        private readonly AdminOpsKnowledgeBasesTool $knowledgeBasesTool,
+        private readonly AdminOpsUrlImportTool $urlImportTool,
+        private readonly AdminOpsAiConfigTool $aiConfigTool,
         private readonly AdminOpsSitePatchBasicsTool $sitePatchBasicsTool,
         private readonly AdminOpsSiteSetActiveThemeTool $siteSetActiveThemeTool,
         private readonly AdminOpsSiteSetArticleAdsTool $siteSetArticleAdsTool,
@@ -166,7 +188,7 @@ class AdminAiOpsChatService
             }
         }
 
-        $toolName = 'AdminOpsAdminActionTool';
+        $toolName = '';
         $executedRow = AdminAiOpsToolApproval::query()
             ->where('run_id', (int) $run->id)
             ->where('status', 'executed')
@@ -282,7 +304,18 @@ class AdminAiOpsChatService
             $this->siteInfoTool,
             $this->listThemesTool,
             $this->listCategoriesTool,
-            $this->adminActionTool,
+            $this->dashboardTool,
+            $this->sensitiveWordsTool,
+            $this->tasksTool,
+            $this->categoryWriteTool,
+            $this->articlesTool,
+            $this->authorsTool,
+            $this->keywordLibrariesTool,
+            $this->titleLibrariesTool,
+            $this->imageLibrariesTool,
+            $this->knowledgeBasesTool,
+            $this->urlImportTool,
+            $this->aiConfigTool,
             $this->sitePatchBasicsTool,
             $this->siteSetActiveThemeTool,
             $this->siteSetArticleAdsTool,

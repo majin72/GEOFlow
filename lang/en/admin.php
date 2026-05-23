@@ -2699,6 +2699,7 @@ return [
         'tool_phase_done' => 'Done',
         'tool_phase_failed' => 'Failed',
         'tool_rejected_default_reason' => 'The administrator rejected this action.',
+        'tool_sibling_cancelled_on_approval' => 'Another tool in the same round was not part of this approval and was cancelled.',
         'tool_args_label' => 'Arguments',
         'tool_raw_output' => 'Raw output',
         'tool_result_preview' => 'Result preview',

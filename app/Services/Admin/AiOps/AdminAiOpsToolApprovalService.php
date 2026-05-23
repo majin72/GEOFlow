@@ -4,15 +4,12 @@ namespace App\Services\Admin\AiOps;
 
 use App\Models\AdminAiOpsRun;
 use App\Models\AdminAiOpsToolApproval;
-use App\Services\Admin\AdminOps\AdminOpsAdminActionService;
-use App\Services\Admin\AdminOps\AdminOpsSiteWriteService;
 use App\Services\Admin\AiOps\Exceptions\AdminAiOpsToolApprovalPendingException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use RuntimeException;
-use Throwable;
 
 /**
  * AI 运维高风险工具挂起审批：落库 pending、批准时执行已存参数、拒绝时仅标记并交由续跑合成 tool_result 语义。
@@ -20,8 +17,7 @@ use Throwable;
 class AdminAiOpsToolApprovalService
 {
     public function __construct(
-        private readonly AdminOpsAdminActionService $adminOpsAdminAction,
-        private readonly AdminOpsSiteWriteService $siteWrite,
+        private readonly AdminAiOpsApprovedToolExecutor $approvedToolExecutor,
         private readonly AdminAiOpsRunService $runService,
     ) {}
 
@@ -388,87 +384,7 @@ class AdminAiOpsToolApprovalService
             throw new RuntimeException('审批参数 JSON 损坏。');
         }
 
-        if ($approval->tool_name === 'AdminOpsAdminActionTool') {
-            $kind = strtolower(trim((string) ($decoded['kind'] ?? '')));
-            $op = strtolower(trim((string) ($decoded['op'] ?? '')));
-            $payload = $decoded['payload'] ?? [];
-            if (! is_array($payload)) {
-                $payload = [];
-            }
-
-            try {
-                $result = $this->adminOpsAdminAction->execute($kind, $op, $payload);
-            } catch (Throwable $e) {
-                return json_encode([
-                    'ok' => false,
-                    'error' => $e->getMessage(),
-                ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
-            }
-
-            return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
-        }
-
-        if ($approval->tool_name === 'AdminOpsSitePatchBasicsTool') {
-            $patch = $decoded['patch'] ?? [];
-            if (! is_array($patch)) {
-                return json_encode(['ok' => false, 'error' => 'patch 参数损坏。'], JSON_UNESCAPED_UNICODE) ?: '{}';
-            }
-            try {
-                $result = $this->siteWrite->patchBasics($patch);
-            } catch (Throwable $e) {
-                return json_encode([
-                    'ok' => false,
-                    'error' => $e->getMessage(),
-                ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
-            }
-
-            return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
-        }
-
-        if ($approval->tool_name === 'AdminOpsSiteSetActiveThemeTool') {
-            $result = $this->siteWrite->setActiveTheme(trim((string) ($decoded['theme_id'] ?? '')));
-
-            return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
-        }
-
-        if ($approval->tool_name === 'AdminOpsSiteSetArticleAdsTool') {
-            $ads = $decoded['ads'] ?? [];
-            if (! is_array($ads)) {
-                return json_encode(['ok' => false, 'error' => 'ads 参数损坏。'], JSON_UNESCAPED_UNICODE) ?: '{}';
-            }
-            $result = $this->siteWrite->setArticleDetailAds($ads);
-
-            return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
-        }
-
-        if ($approval->tool_name === 'AdminOpsArticleSearchPatchTool') {
-            $patch = $decoded['patch'] ?? [];
-            if (! is_array($patch)) {
-                return json_encode(['ok' => false, 'error' => 'patch 参数损坏。'], JSON_UNESCAPED_UNICODE) ?: '{}';
-            }
-            $result = $this->siteWrite->patchArticleSearch($patch);
-
-            return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
-        }
-
-        if ($approval->tool_name === 'AdminOpsExternalFetchPatchTool') {
-            $patch = $decoded['patch'] ?? [];
-            if (! is_array($patch)) {
-                return json_encode(['ok' => false, 'error' => 'patch 参数损坏。'], JSON_UNESCAPED_UNICODE) ?: '{}';
-            }
-            $result = $this->siteWrite->patchExternalFetch($patch);
-
-            return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
-        }
-
-        if ($approval->tool_name === 'AdminOpsSetDefaultEmbeddingModelTool') {
-            $modelId = (int) ($decoded['model_id'] ?? 0);
-            $result = $this->siteWrite->setDefaultEmbeddingModelId($modelId);
-
-            return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
-        }
-
-        throw new RuntimeException('暂不支持的审批工具：'.$approval->tool_name);
+        return $this->approvedToolExecutor->execute((string) $approval->tool_name, $decoded);
     }
 
     /**

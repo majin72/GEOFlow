@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Services\Admin\AdminOps;
 
-use App\Ai\Tools\AdminOpsAdminActionTool;
 use App\Models\Category;
 use App\Services\Admin\AdminOps\AdminAction\AdminOpsMirrorArticlesHandler;
 use App\Services\Admin\AdminOps\AdminAction\AdminOpsMirrorAuthorsHandler;
@@ -16,7 +15,7 @@ use App\Services\Admin\AdminOps\AdminAction\AdminOpsMirrorUrlAiHandler;
 use InvalidArgumentException;
 
 /**
- * 后台 Blade 路由能力的统一入口（供 {@see AdminOpsAdminActionTool} 调用）。
+ * 后台 Blade 路由能力的统一入口（供各领域 AI 运维 Mirror 工具调用）。
  *
  * 明确排除：管理员账号、API Token、活动日志、当前账号改密（不实现、不暴露 op）。
  */
@@ -103,7 +102,7 @@ final class AdminOpsAdminActionService
             'ai_models_list' => $this->urlAi->aiModelsList(),
             'ai_prompts_list' => $this->urlAi->aiPromptsList(),
             'ai_special_prompts_read' => $this->urlAi->aiSpecialPromptsRead(),
-            default => throw new InvalidArgumentException('未知 read 操作：'.$op.'。请查看 AdminOpsAdminActionTool 描述中的操作清单。'),
+            default => throw new InvalidArgumentException('未知 read 操作：'.$op.'。请使用对应领域 AI 运维工具。'),
         };
     }
 

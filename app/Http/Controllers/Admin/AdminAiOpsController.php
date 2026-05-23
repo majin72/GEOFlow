@@ -810,7 +810,7 @@ class AdminAiOpsController extends Controller
         }
 
         $preview = (string) __('admin.ai_ops.tool_pending_approval_result_preview');
-        app(AdminAiOpsStreamContext::class)->timeline->markCallingToolsAwaitingApproval($preview);
+        app(AdminAiOpsStreamContext::class)->timeline->markToolAwaitingApprovalByCallId($lastId, $preview);
 
         $this->writeAdminAiOpsSseJsonEvent('tool', [
             'phase' => 'awaiting_approval',
@@ -874,6 +874,23 @@ class AdminAiOpsController extends Controller
             $payload['raw_output'] = $rawOutput;
         }
         $this->writeAdminAiOpsSseJsonEvent('tool', $payload);
+
+        $cancelReason = (string) __('admin.ai_ops.tool_sibling_cancelled_on_approval');
+        foreach (app(AdminAiOpsStreamContext::class)->timeline->markSiblingPendingToolsRejected($toolCallId, $cancelReason) as $sibling) {
+            $siblingId = trim((string) ($sibling['tool_call_id'] ?? ''));
+            if ($siblingId === '') {
+                continue;
+            }
+            $this->writeAdminAiOpsSseJsonEvent('tool', [
+                'phase' => 'rejected',
+                'tool_call_id' => $siblingId,
+                'tool_name' => (string) ($sibling['tool_name'] ?? ''),
+                'successful' => false,
+                'error' => $cancelReason,
+                'result_preview' => $cancelReason,
+            ]);
+        }
+
         $this->writeAdminAiOpsSseJsonEvent('stream_status', [
             'kind' => 'post_tool_model_round',
             'tool_name' => (string) $approval->tool_name,
@@ -938,6 +955,21 @@ class AdminAiOpsController extends Controller
             'error' => $reason,
             'result_preview' => $reason,
         ]);
+
+        foreach ($ctx->timeline->markSiblingPendingToolsRejected($toolCallId, $reason) as $sibling) {
+            $siblingId = trim((string) ($sibling['tool_call_id'] ?? ''));
+            if ($siblingId === '') {
+                continue;
+            }
+            $this->writeAdminAiOpsSseJsonEvent('tool', [
+                'phase' => 'rejected',
+                'tool_call_id' => $siblingId,
+                'tool_name' => (string) ($sibling['tool_name'] ?? ''),
+                'successful' => false,
+                'error' => $reason,
+                'result_preview' => $reason,
+            ]);
+        }
     }
 
     /**

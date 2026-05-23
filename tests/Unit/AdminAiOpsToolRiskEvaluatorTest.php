@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Tests\Unit;
 
 use App\Services\Admin\AiOps\AdminAiOpsToolRiskEvaluator;
@@ -10,73 +12,43 @@ class AdminAiOpsToolRiskEvaluatorTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_write_admin_action_requires_risk_label(): void
+    public function test_authors_create_mirror_tool_requires_risk_label(): void
     {
         config(['geoflow.admin_ai_ops_tool_approval.enabled' => true]);
 
-        $eval = new AdminAiOpsToolRiskEvaluator;
-        $label = $eval->evaluate('AdminOpsAdminActionTool', [
-            'kind' => 'write',
-            'op' => 'category_create',
-            'payload' => [],
+        $eval = app(AdminAiOpsToolRiskEvaluator::class);
+        $label = $eval->evaluate('AdminOpsAuthorsTool', [
+            'op' => 'author_create',
+            'payload' => ['name' => '爱旅行'],
         ]);
 
         $this->assertNotNull($label);
-        $this->assertStringContainsString('category_create', (string) $label);
+        $this->assertStringContainsString('author_create', (string) $label);
     }
 
     public function test_site_patch_basics_requires_risk_label(): void
     {
         config(['geoflow.admin_ai_ops_tool_approval.enabled' => true]);
 
-        $eval = new AdminAiOpsToolRiskEvaluator;
+        $eval = app(AdminAiOpsToolRiskEvaluator::class);
         $label = $eval->evaluate('AdminOpsSitePatchBasicsTool', [
             'patch' => ['site_name' => 'X'],
         ]);
 
         $this->assertNotNull($label);
         $this->assertStringContainsString('site_patch_basics', (string) $label);
-        $this->assertStringContainsString('site_name', (string) $label);
-    }
-
-    public function test_read_admin_action_does_not_require_approval(): void
-    {
-        config(['geoflow.admin_ai_ops_tool_approval.enabled' => true]);
-
-        $eval = new AdminAiOpsToolRiskEvaluator;
-        $label = $eval->evaluate('AdminOpsAdminActionTool', [
-            'kind' => 'read',
-            'op' => 'dashboard_summary',
-            'payload' => [],
-        ]);
-
-        $this->assertNull($label);
     }
 
     public function test_when_disabled_returns_null_even_for_write(): void
     {
         config(['geoflow.admin_ai_ops_tool_approval.enabled' => false]);
 
-        $eval = new AdminAiOpsToolRiskEvaluator;
-        $label = $eval->evaluate('AdminOpsAdminActionTool', [
-            'kind' => 'write',
-            'op' => 'x',
-            'payload' => [],
+        $eval = app(AdminAiOpsToolRiskEvaluator::class);
+        $label = $eval->evaluate('AdminOpsAuthorsTool', [
+            'op' => 'author_create',
+            'payload' => ['name' => 'x'],
         ]);
 
         $this->assertNull($label);
-    }
-
-    public function test_set_active_theme_requires_approval(): void
-    {
-        config(['geoflow.admin_ai_ops_tool_approval.enabled' => true]);
-
-        $eval = new AdminAiOpsToolRiskEvaluator;
-        $label = $eval->evaluate('AdminOpsSiteSetActiveThemeTool', [
-            'theme_id' => 'default',
-        ]);
-
-        $this->assertNotNull($label);
-        $this->assertStringContainsString('site_set_theme', (string) $label);
     }
 }

@@ -234,6 +234,7 @@
             'toolRawOutput' => __('admin.ai_ops.tool_raw_output'),
             'toolResultPreview' => __('admin.ai_ops.tool_result_preview'),
             'toolPendingApprovalResult' => __('admin.ai_ops.tool_pending_approval_result_preview'),
+            'toolSiblingCancelledOnApproval' => __('admin.ai_ops.tool_sibling_cancelled_on_approval'),
             'toolApprovalTitle' => __('admin.ai_ops.tool_approval_title'),
             'toolApprovalBanner' => __('admin.ai_ops.tool_approval_banner'),
             'toolApprovalExpires' => __('admin.ai_ops.tool_approval_expires'),

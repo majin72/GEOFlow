@@ -135,6 +135,8 @@ final class AdminAiOpsAssistantTimelineRecorder
 
     /**
      * 审批挂起：将仍为 calling 的工具标记为 awaiting_approval（勿显示为已完成）。
+     *
+     * @deprecated 同轮可能存在多个 calling；请使用 {@see markToolAwaitingApprovalByCallId}。
      */
     public function markCallingToolsAwaitingApproval(?string $resultPreview): void
     {
@@ -153,6 +155,78 @@ final class AdminAiOpsAssistantTimelineRecorder
             }
         }
         unset($segment, $tool);
+    }
+
+    /**
+     * 审批挂起：仅将指定 tool_call_id 且仍为 calling 的工具标为 awaiting_approval。
+     */
+    public function markToolAwaitingApprovalByCallId(string $toolCallId, ?string $resultPreview): void
+    {
+        $tid = trim($toolCallId);
+        if ($tid === '') {
+            return;
+        }
+
+        foreach ($this->segments as &$segment) {
+            if (($segment['kind'] ?? '') !== 'tools' || ! is_array($segment['tools'] ?? null)) {
+                continue;
+            }
+            foreach ($segment['tools'] as &$tool) {
+                if (($tool['toolCallId'] ?? '') !== $tid || ($tool['phase'] ?? '') !== 'calling') {
+                    continue;
+                }
+                $tool['phase'] = 'awaiting_approval';
+                $tool['successful'] = false;
+                if ($resultPreview !== null && $resultPreview !== '') {
+                    $tool['resultPreview'] = $resultPreview;
+                }
+
+                return;
+            }
+        }
+        unset($segment, $tool);
+    }
+
+    /**
+     * 用户已处理当前审批：将同轮其它仍处于 calling / awaiting_approval / executing 的工具标为 rejected，避免界面残留「待确认」。
+     *
+     * @return list<array{tool_call_id: string, tool_name: string}>
+     */
+    public function markSiblingPendingToolsRejected(string $activeToolCallId, ?string $reason): array
+    {
+        $active = trim($activeToolCallId);
+        $msg = $reason !== null ? trim($reason) : '';
+        $affected = [];
+
+        foreach ($this->segments as &$segment) {
+            if (($segment['kind'] ?? '') !== 'tools' || ! is_array($segment['tools'] ?? null)) {
+                continue;
+            }
+            foreach ($segment['tools'] as &$tool) {
+                $phase = (string) ($tool['phase'] ?? '');
+                if (! in_array($phase, ['calling', 'awaiting_approval', 'executing'], true)) {
+                    continue;
+                }
+                $tid = (string) ($tool['toolCallId'] ?? '');
+                if ($active !== '' && $tid === $active) {
+                    continue;
+                }
+                $tool['phase'] = 'rejected';
+                $tool['successful'] = false;
+                if ($msg !== '') {
+                    $tool['error'] = $msg;
+                }
+                if ($tid !== '') {
+                    $affected[] = [
+                        'tool_call_id' => $tid,
+                        'tool_name' => (string) ($tool['name'] ?? ''),
+                    ];
+                }
+            }
+        }
+        unset($segment, $tool);
+
+        return $affected;
     }
 
     /**

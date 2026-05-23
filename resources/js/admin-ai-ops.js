@@ -1054,24 +1054,49 @@ const root = document.getElementById('admin-ai-ops-page');
             }
         }
 
-        function markCallingToolsAwaitingApproval(live, previewText) {
+        /**
+         * 审批挂起：仅将指定 tool_call_id 且仍为 calling 的工具标为 awaiting_approval。
+         *
+         * @param {object} live
+         * @param {string} toolCallId
+         * @param {string} previewText
+         */
+        function markToolAwaitingApprovalByCallId(live, toolCallId, previewText) {
+            const tid = String(toolCallId || '').trim();
+            if (!tid) {
+                return;
+            }
+            const row = findToolRowByCallId(live, tid);
+            if (!row || row.phase !== 'calling') {
+                return;
+            }
+            row.phase = 'awaiting_approval';
+            row.successful = false;
             const pv = String(previewText || '').trim();
-            const mark = (t) => {
-                if (t && t.phase === 'calling') {
-                    t.phase = 'awaiting_approval';
-                    t.successful = false;
-                    if (pv) {
-                        t.resultPreview = pv;
-                    }
+            if (pv) {
+                row.resultPreview = pv;
+            }
+        }
+
+        /**
+         * 用户已处理当前审批：收尾同轮其它 calling / awaiting_approval / executing 工具，避免残留「待确认」。
+         *
+         * @param {object} live
+         * @param {string} activeToolCallId
+         * @param {string} reason
+         */
+        function markSiblingPendingToolsRejected(live, activeToolCallId, reason) {
+            const active = String(activeToolCallId || '').trim();
+            const msg = String(reason || '').trim() || text.toolPhaseRejected;
+            collectLiveToolsFlat(live).forEach((t) => {
+                if (!['calling', 'awaiting_approval', 'executing'].includes(t.phase)) {
+                    return;
                 }
-            };
-            (live.segments || []).forEach((seg) => {
-                if (seg.kind === 'tools') {
-                    (seg.tools || []).forEach(mark);
+                if (active && String(t.toolCallId || '') === active) {
+                    return;
                 }
+                markToolRejectedByCallId(live, String(t.toolCallId || ''), msg);
             });
-            renderTranscript();
-            updateHeaderFromSession();
         }
 
         /**
@@ -1120,7 +1145,9 @@ const root = document.getElementById('admin-ai-ops-page');
                     if (tcid) {
                         approvalToolCallByRunId[id] = tcid;
                     }
-                    markCallingToolsAwaitingApproval(live, text.toolPendingApprovalResult);
+                    if (tcid) {
+                        markToolAwaitingApprovalByCallId(live, tcid, text.toolPendingApprovalResult);
+                    }
                     renderTranscript();
                     showToolApprovalModal(Number(id), {
                         id: data.approval_id,
@@ -1627,6 +1654,7 @@ const root = document.getElementById('admin-ai-ops-page');
             const toolCallId = resolveApprovalToolCallId(live, rid, ctx.toolCallId, toolName);
             if (toolCallId) {
                 approvalToolCallByRunId[String(rid)] = toolCallId;
+                markSiblingPendingToolsRejected(live, toolCallId, text.toolSiblingCancelledOnApproval);
                 markToolPhaseByCallId(live, toolCallId, 'executing', { successful: false, toolName });
                 syncRunAssistantTimelineFromLiveBuffer(
                     state.currentSession?.runs?.find((r) => Number(r.id) === Number(rid)) || { id: rid },
@@ -1690,7 +1718,9 @@ const root = document.getElementById('admin-ai-ops-page');
             const live = ensureLiveStruct(rid);
             const toolCallId = resolveApprovalToolCallId(live, rid, ctx.toolCallId, toolName);
             if (toolCallId) {
-                markToolRejectedByCallId(live, toolCallId, reason || text.toolPhaseRejected);
+                const rejectMsg = reason || text.toolPhaseRejected;
+                markToolRejectedByCallId(live, toolCallId, rejectMsg);
+                markSiblingPendingToolsRejected(live, toolCallId, rejectMsg);
                 syncRunAssistantTimelineFromLiveBuffer(
                     state.currentSession?.runs?.find((r) => Number(r.id) === Number(rid)) || { id: rid },
                 );

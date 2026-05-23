@@ -2699,6 +2699,7 @@ return [
         'tool_phase_done' => '已完成',
         'tool_phase_failed' => '失败',
         'tool_rejected_default_reason' => '管理员已拒绝执行该操作。',
+        'tool_sibling_cancelled_on_approval' => '同轮另有工具未进入本次审批，已自动取消。',
         'tool_args_label' => '参数预览',
         'tool_raw_output' => '原始输出',
         'tool_result_preview' => '返回摘要',

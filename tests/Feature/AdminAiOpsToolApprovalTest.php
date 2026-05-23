@@ -46,9 +46,8 @@ class AdminAiOpsToolApprovalTest extends TestCase
             'id' => $approvalId,
             'run_id' => (int) $run->id,
             'admin_id' => (int) $admin->id,
-            'tool_name' => 'AdminOpsAdminActionTool',
+            'tool_name' => 'AdminOpsTasksTool',
             'arguments_json' => json_encode([
-                'kind' => 'write',
                 'op' => 'task_toggle',
                 'payload' => ['task_id' => 0, 'current_status' => 'active'],
             ], JSON_THROW_ON_ERROR),
@@ -329,9 +328,8 @@ class AdminAiOpsToolApprovalTest extends TestCase
             'id' => $approvalId,
             'run_id' => (int) $run->id,
             'admin_id' => (int) $admin->id,
-            'tool_name' => 'AdminOpsAdminActionTool',
+            'tool_name' => 'AdminOpsTasksTool',
             'arguments_json' => json_encode([
-                'kind' => 'write',
                 'op' => 'noop',
                 'payload' => [],
             ], JSON_THROW_ON_ERROR),
