@@ -57,9 +57,16 @@ final class AdminOpsSitePatchBasicsTool implements Tool
             'patch' => $decoded,
         ]);
         if ($risk !== null) {
-            $this->aiOpsApprovals->createPendingAndThrow('AdminOpsSitePatchBasicsTool', [
+            $pending = $this->aiOpsApprovals->createPendingWithoutThrow('AdminOpsSitePatchBasicsTool', [
                 'patch' => $decoded,
             ], $risk);
+
+            return json_encode([
+                'ok' => false,
+                'pending_user_approval' => true,
+                'approval_id' => $pending['approval_id'],
+                'message' => (string) __('admin.ai_ops.tool_pending_approval_result_preview'),
+            ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
         }
 
         $result = $this->siteWrite->patchBasics($decoded);

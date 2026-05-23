@@ -60,7 +60,7 @@ class AdminAiOpsChatAgent implements Agent, Conversational, HasTools
 
 【内容与任务】
 - 仪表盘：AdminOpsDashboardTool。
-- 任务：AdminOpsTasksTool（创建前先 action=form_options；task_name 勿用 name）。
+- 任务：AdminOpsTasksTool（创建前先 action=form_options；update 可只传要改的字段如 ai_model_id；task_name 勿用 name）。
 - 文章：AdminOpsArticlesTool。
 - 作者：AdminOpsAuthorsTool（create 必填 name，勿用 author_name）。
 - 敏感词：AdminOpsSensitiveWordsTool。
@@ -78,7 +78,8 @@ class AdminAiOpsChatAgent implements Agent, Conversational, HasTools
 - 关键词检索（仅勾选联网且挂载 TavilyWebSearchTool）：TavilyWebSearchTool。
 
 【通用】
-- 写入工具 ok:false 时如实说明校验错误；写入类操作需管理员在对话内点「同意」后生效。
+- 写入工具 ok:false 时如实说明校验错误；写入类操作需管理员在界面点击「批准执行」，同轮多个写操作会逐条排队确认，勿让用户在对话里打字「同意」。
+- 未见到工具 JSON 返回 ok:true 前，禁止声称「已更新 N 个任务/已完成迁移」。
 - 无法改项目源码；改代码请说明文件与要点由人工处理。
 - 多步骤巡检：先说明计划，再调只读工具，最后用 Markdown 归纳报告。
 TXT;

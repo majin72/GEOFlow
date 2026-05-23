@@ -22,13 +22,12 @@ class AdminAiOpsToolApprovalService
     ) {}
 
     /**
-     * 创建一条待审批记录、更新 run 快照与状态，并抛出 {@see AdminAiOpsToolApprovalPendingException} 以中断首轮模型流。
+     * 创建 pending 记录但不中断 Agent 流（同轮可累积多条，轮次结束后统一弹出首条审批）。
      *
-     * @param  array<string, mixed>  $normalizedArguments  已解析的工具参数（不含敏感原始 JSON 字符串）
-     *
-     * @throws AdminAiOpsToolApprovalPendingException
+     * @param  array<string, mixed>  $normalizedArguments
+     * @return array{approval_id: string, tool_name: string, summary: string, fingerprint: string, expires_at: string}
      */
-    public function createPendingAndThrow(string $toolName, array $normalizedArguments, string $riskLabel): void
+    public function createPendingWithoutThrow(string $toolName, array $normalizedArguments, string $riskLabel): array
     {
         if (! app()->bound(AdminAiOpsStreamContext::class)) {
             throw new RuntimeException('缺少 AI 运维流式上下文，无法挂起工具审批。');
@@ -37,36 +36,172 @@ class AdminAiOpsToolApprovalService
         /** @var AdminAiOpsStreamContext $ctx */
         $ctx = app(AdminAiOpsStreamContext::class);
 
-        $ttl = max(60, (int) config('geoflow.admin_ai_ops_tool_approval.ttl_seconds', 900));
+        $meta = $this->insertPendingRecord(
+            runId: $ctx->runId,
+            adminId: $ctx->adminId,
+            toolName: $toolName,
+            normalizedArguments: $normalizedArguments,
+            riskLabel: $riskLabel,
+            partialAssistantText: (string) ($ctx->partialAssistantText ?? ''),
+            toolCallId: trim((string) $ctx->lastToolCallId),
+        );
 
+        Log::info('admin_ai_ops_tool_approval_pending', [
+            'approval_id' => $meta['approval_id'],
+            'run_id' => $ctx->runId,
+            'admin_id' => $ctx->adminId,
+            'tool_name' => $toolName,
+            'fingerprint' => $meta['fingerprint'],
+            'risk_label' => $riskLabel,
+        ]);
+
+        return $meta;
+    }
+
+    /**
+     * 创建一条待审批记录、更新 run 快照与状态，并抛出 {@see AdminAiOpsToolApprovalPendingException} 以中断首轮模型流。
+     *
+     * @param  array<string, mixed>  $normalizedArguments
+     *
+     * @throws AdminAiOpsToolApprovalPendingException
+     */
+    public function createPendingAndThrow(string $toolName, array $normalizedArguments, string $riskLabel): void
+    {
+        $meta = $this->createPendingWithoutThrow($toolName, $normalizedArguments, $riskLabel);
+
+        throw new AdminAiOpsToolApprovalPendingException(
+            approvalId: $meta['approval_id'],
+            toolName: $toolName,
+            summary: $meta['summary'],
+            fingerprint: $meta['fingerprint'],
+            expiresAtIso8601: $meta['expires_at'],
+        );
+    }
+
+    /**
+     * 按创建顺序返回 run 下第一条 pending 审批。
+     */
+    public function firstPendingForRun(int $runId): ?AdminAiOpsToolApproval
+    {
+        return $this->pendingQueryForRun($runId)->first();
+    }
+
+    /**
+     * 将 pending 审批与 SSE/时间线中的 tool_call_id 对齐（并行 tool_call 时 lastToolCallId 可能不准确）。
+     */
+    public function syncToolCallId(string $approvalId, string $toolCallId): void
+    {
+        $approvalId = trim($approvalId);
+        $toolCallId = trim($toolCallId);
+        if ($approvalId === '' || $toolCallId === '') {
+            return;
+        }
+
+        AdminAiOpsToolApproval::query()
+            ->whereKey($approvalId)
+            ->where('status', 'pending')
+            ->where(function ($query) use ($toolCallId): void {
+                $query->whereNull('tool_call_id')
+                    ->orWhere('tool_call_id', '')
+                    ->orWhere('tool_call_id', '!=', $toolCallId);
+            })
+            ->update(['tool_call_id' => $toolCallId]);
+    }
+
+    /**
+     * 统计 run 下仍待处理的审批数量。
+     */
+    public function pendingCountForRun(int $runId): int
+    {
+        return (int) AdminAiOpsToolApproval::query()
+            ->where('run_id', $runId)
+            ->where('status', 'pending')
+            ->count();
+    }
+
+    /**
+     * 构造前端 Modal / SSE 使用的审批摘要。
+     *
+     * @return array{id: string, tool_name: string, tool_call_id: string, summary: string, expires_at: string|null, fingerprint: string, queue_remaining: int}
+     */
+    public function formatApprovalPayload(AdminAiOpsToolApproval $approval): array
+    {
+        $runId = (int) $approval->run_id;
+        $snapshot = [];
+        $run = AdminAiOpsRun::query()->whereKey($runId)->first(['plan_stream_snapshot']);
+        if ($run instanceof AdminAiOpsRun) {
+            $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
+        }
+
+        return [
+            'id' => (string) $approval->id,
+            'tool_name' => (string) $approval->tool_name,
+            'tool_call_id' => trim((string) ($approval->tool_call_id ?? $snapshot['last_tool_call_id'] ?? '')),
+            'summary' => $this->approvalSummaryLine($approval),
+            'expires_at' => $approval->expires_at?->toIso8601String(),
+            'fingerprint' => (string) $approval->args_fingerprint,
+            'queue_remaining' => $this->pendingCountForRun($runId),
+        ];
+    }
+
+    /**
+     * @return list<AdminAiOpsToolApproval>
+     */
+    public function decidedApprovalsForRun(int $runId): array
+    {
+        return AdminAiOpsToolApproval::query()
+            ->where('run_id', $runId)
+            ->whereIn('status', ['executed', 'rejected'])
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get()
+            ->all();
+    }
+
+    /**
+     * 落库 pending 行并将 run 置为 awaiting_confirmation。
+     *
+     * @param  array<string, mixed>  $normalizedArguments
+     * @return array{approval_id: string, tool_name: string, summary: string, fingerprint: string, expires_at: string}
+     */
+    private function insertPendingRecord(
+        int $runId,
+        int $adminId,
+        string $toolName,
+        array $normalizedArguments,
+        string $riskLabel,
+        string $partialAssistantText,
+        string $toolCallId,
+    ): array {
+        $ttl = max(60, (int) config('geoflow.admin_ai_ops_tool_approval.ttl_seconds', 900));
         $encoded = json_encode($normalizedArguments, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         $fingerprint = hash('sha256', $encoded);
-
         $approvalId = (string) Str::uuid();
         $expiresAt = now()->addSeconds($ttl);
+        $summary = '需确认的写操作：'.Str::limit($riskLabel, 120, '…');
 
-        DB::transaction(function () use ($approvalId, $ctx, $toolName, $encoded, $fingerprint, $riskLabel, $expiresAt): void {
-            $run = AdminAiOpsRun::query()->whereKey($ctx->runId)->lockForUpdate()->first();
+        DB::transaction(function () use ($approvalId, $runId, $adminId, $toolName, $encoded, $fingerprint, $riskLabel, $expiresAt, $partialAssistantText, $toolCallId): void {
+            $run = AdminAiOpsRun::query()->whereKey($runId)->lockForUpdate()->first();
             if (! $run instanceof AdminAiOpsRun) {
                 throw new RuntimeException('执行轮次不存在。');
             }
 
-            $partial = (string) ($ctx->partialAssistantText ?? '');
             $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
-            $snapshot['partial_assistant_text'] = $partial;
-            $snapshot['pending_approval_id'] = $approvalId;
+            $snapshot['partial_assistant_text'] = $partialAssistantText;
+            if (! array_key_exists('pending_approval_id', $snapshot)) {
+                $snapshot['pending_approval_id'] = $approvalId;
+            }
             $snapshot['original_user_message'] = trim((string) ($run->input_text ?? ''));
-            $lastToolCallId = trim((string) $ctx->lastToolCallId);
-            if ($lastToolCallId !== '') {
-                $snapshot['last_tool_call_id'] = $lastToolCallId;
+            if ($toolCallId !== '') {
+                $snapshot['last_tool_call_id'] = $toolCallId;
             }
 
             AdminAiOpsToolApproval::query()->create([
                 'id' => $approvalId,
-                'run_id' => (int) $run->id,
-                'admin_id' => $ctx->adminId,
+                'run_id' => $runId,
+                'admin_id' => $adminId,
                 'tool_name' => $toolName,
-                'tool_call_id' => $lastToolCallId !== '' ? $lastToolCallId : null,
+                'tool_call_id' => $toolCallId !== '' ? $toolCallId : null,
                 'arguments_json' => $encoded,
                 'args_fingerprint' => $fingerprint,
                 'risk_label' => Str::limit($riskLabel, 160, ''),
@@ -80,24 +215,26 @@ class AdminAiOpsToolApprovalService
             ]);
         });
 
-        $summary = '需确认的写操作：'.Str::limit($riskLabel, 120, '…');
-
-        Log::info('admin_ai_ops_tool_approval_pending', [
+        return [
             'approval_id' => $approvalId,
-            'run_id' => $ctx->runId,
-            'admin_id' => $ctx->adminId,
             'tool_name' => $toolName,
+            'summary' => $summary,
             'fingerprint' => $fingerprint,
-            'risk_label' => $riskLabel,
-        ]);
+            'expires_at' => $expiresAt->toIso8601String(),
+        ];
+    }
 
-        throw new AdminAiOpsToolApprovalPendingException(
-            approvalId: $approvalId,
-            toolName: $toolName,
-            summary: $summary,
-            fingerprint: $fingerprint,
-            expiresAtIso8601: $expiresAt->toIso8601String(),
-        );
+    /**
+     * 供 Modal 展示的一行摘要。
+     */
+    private function approvalSummaryLine(AdminAiOpsToolApproval $row): string
+    {
+        $label = trim((string) ($row->risk_label ?? ''));
+        if ($label !== '') {
+            return '需确认的写操作：'.Str::limit($label, 120, '…');
+        }
+
+        return '需确认的写操作：'.Str::limit((string) $row->tool_name, 120, '…');
     }
 
     /**
@@ -112,7 +249,8 @@ class AdminAiOpsToolApprovalService
         $approval = AdminAiOpsToolApproval::query()
             ->where('run_id', (int) $run->id)
             ->where('status', 'pending')
-            ->orderByDesc('id')
+            ->orderBy('created_at')
+            ->orderBy('id')
             ->first();
 
         if (! $approval instanceof AdminAiOpsToolApproval) {
@@ -171,11 +309,21 @@ class AdminAiOpsToolApprovalService
                 abort(404, '执行轮次不存在。');
             }
             if ((string) $run->status === 'completed') {
-                return ['resume_stream_url' => null, 'already_executed' => true, 'executed_this_request' => false];
+                return [
+                    'resume_stream_url' => null,
+                    'next_approval' => null,
+                    'queue_remaining' => 0,
+                    'already_executed' => true,
+                    'executed_this_request' => false,
+                ];
             }
 
+            $next = $this->firstPendingForRun($runId);
+
             return [
-                'resume_stream_url' => $this->issueResumeUrl($approval, $adminId, 'approve'),
+                'resume_stream_url' => $next === null ? $this->issueResumeUrl($approval, $adminId, 'approve') : null,
+                'next_approval' => $next instanceof AdminAiOpsToolApproval ? $this->formatApprovalPayload($next) : null,
+                'queue_remaining' => $this->pendingCountForRun($runId),
                 'already_executed' => true,
                 'executed_this_request' => false,
             ];
@@ -225,8 +373,9 @@ class AdminAiOpsToolApprovalService
                 $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
                 $snapshot['resume_decision'] = 'approve';
                 $snapshot['tool_output_text'] = $output;
+                $nextPending = $this->firstPendingForRun((int) $run->id);
                 $this->runService->updateRun($run, [
-                    'status' => 'processing',
+                    'status' => $nextPending instanceof AdminAiOpsToolApproval ? 'awaiting_confirmation' : 'processing',
                     'plan_stream_snapshot' => $snapshot,
                 ]);
             }
@@ -252,12 +401,15 @@ class AdminAiOpsToolApprovalService
                 'tool_name' => $approval->tool_name,
                 'fingerprint' => $approval->args_fingerprint,
             ]);
+            $this->persistApprovalDecisionOnTimeline($approval->fresh() ?? $approval, 'executed');
         }
 
-        $url = $this->issueResumeUrl($approval, $adminId, 'approve');
+        $next = $this->firstPendingForRun($runId);
 
         return [
-            'resume_stream_url' => $url,
+            'resume_stream_url' => $next === null ? $this->issueResumeUrl($approval, $adminId, 'approve') : null,
+            'next_approval' => $next instanceof AdminAiOpsToolApproval ? $this->formatApprovalPayload($next) : null,
+            'queue_remaining' => $this->pendingCountForRun($runId),
             'already_executed' => ! $executedThisRequest,
             'executed_this_request' => $executedThisRequest,
         ];
@@ -283,7 +435,13 @@ class AdminAiOpsToolApprovalService
                 abort(409, '该审批流程已结束。');
             }
 
-            return ['reject_resume_stream_url' => $this->issueResumeUrl($approval, $adminId, 'reject')];
+            $next = $this->firstPendingForRun($runId);
+
+            return [
+                'reject_resume_stream_url' => $next === null ? $this->issueResumeUrl($approval, $adminId, 'reject') : null,
+                'next_approval' => $next instanceof AdminAiOpsToolApproval ? $this->formatApprovalPayload($next) : null,
+                'queue_remaining' => $this->pendingCountForRun($runId),
+            ];
         }
 
         if ($approval->status !== 'pending') {
@@ -326,8 +484,9 @@ class AdminAiOpsToolApprovalService
                 $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
                 $snapshot['resume_decision'] = 'reject';
                 $snapshot['reject_reason'] = $reason;
+                $nextPending = $this->firstPendingForRun((int) $run->id);
                 $this->runService->updateRun($run, [
-                    'status' => 'processing',
+                    'status' => $nextPending instanceof AdminAiOpsToolApproval ? 'awaiting_confirmation' : 'processing',
                     'plan_stream_snapshot' => $snapshot,
                 ]);
             }
@@ -351,7 +510,17 @@ class AdminAiOpsToolApprovalService
             'fingerprint' => $approval->args_fingerprint,
         ]);
 
-        return ['reject_resume_stream_url' => $this->issueResumeUrl($approval, $adminId, 'reject')];
+        $this->persistApprovalDecisionOnTimeline($approval->fresh() ?? $approval, 'rejected');
+
+        return [
+            'reject_resume_stream_url' => $this->firstPendingForRun($runId) === null
+                ? $this->issueResumeUrl($approval, $adminId, 'reject')
+                : null,
+            'next_approval' => ($next = $this->firstPendingForRun($runId)) instanceof AdminAiOpsToolApproval
+                ? $this->formatApprovalPayload($next)
+                : null,
+            'queue_remaining' => $this->pendingCountForRun($runId),
+        ];
     }
 
     /**
@@ -417,6 +586,58 @@ class AdminAiOpsToolApprovalService
     }
 
     /**
+     * HTTP 批准/拒绝后，将工具卡片终态写入 plan_stream_snapshot，避免刷新后从「已完成」回退为「待确认」。
+     */
+    private function persistApprovalDecisionOnTimeline(AdminAiOpsToolApproval $approval, string $decision): void
+    {
+        $run = AdminAiOpsRun::query()->whereKey((int) $approval->run_id)->first();
+        if (! $run instanceof AdminAiOpsRun) {
+            return;
+        }
+
+        $toolCallId = trim((string) ($approval->tool_call_id ?? ''));
+        if ($toolCallId === '') {
+            return;
+        }
+
+        $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
+        $recorder = AdminAiOpsAssistantTimelineRecorder::fromSnapshot($snapshot);
+
+        if ($decision === 'executed') {
+            $output = trim((string) ($approval->executed_output ?? ''));
+            $successful = true;
+            $error = '';
+            if ($output !== '') {
+                $decoded = json_decode($output, true);
+                if (is_array($decoded) && array_key_exists('ok', $decoded)) {
+                    $successful = (bool) $decoded['ok'];
+                    if (! $successful) {
+                        $error = trim((string) ($decoded['error'] ?? '工具执行失败。'));
+                    }
+                }
+            }
+            $preview = $output !== '' ? mb_substr($output, 0, 2400) : null;
+            $recorder->recordToolDone(
+                $toolCallId,
+                (string) $approval->tool_name,
+                $successful,
+                $error,
+                $preview,
+            );
+        } elseif ($decision === 'rejected') {
+            $reason = trim((string) ($approval->rejection_reason ?? ''));
+            if ($reason === '') {
+                $reason = 'denied by user approval prompt';
+            }
+            $recorder->markToolRejectedByCallId($toolCallId, $reason);
+        } else {
+            return;
+        }
+
+        $this->runService->persistAssistantTimeline($run, $recorder->toArray());
+    }
+
+    /**
      * 将单条 pending 标为 expired，并在 run 仍处于 awaiting_confirmation 时置为 failed。
      */
     private function expirePendingRowAndFailRun(AdminAiOpsToolApproval $approval): void
@@ -454,5 +675,17 @@ class AdminAiOpsToolApprovalService
         if ((int) $approval->run_id !== $runId) {
             abort(404, '审批与执行轮次不匹配。');
         }
+    }
+
+    /**
+     * @return \Illuminate\Database\Eloquent\Builder<AdminAiOpsToolApproval>
+     */
+    private function pendingQueryForRun(int $runId): \Illuminate\Database\Eloquent\Builder
+    {
+        return AdminAiOpsToolApproval::query()
+            ->where('run_id', $runId)
+            ->where('status', 'pending')
+            ->orderBy('created_at')
+            ->orderBy('id');
     }
 }

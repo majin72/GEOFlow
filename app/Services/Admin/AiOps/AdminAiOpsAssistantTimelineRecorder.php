@@ -175,6 +175,9 @@ final class AdminAiOpsAssistantTimelineRecorder
                 if (($tool['toolCallId'] ?? '') !== $tid || ($tool['phase'] ?? '') !== 'calling') {
                     continue;
                 }
+                if (in_array((string) ($tool['phase'] ?? ''), ['done', 'rejected'], true)) {
+                    return;
+                }
                 $tool['phase'] = 'awaiting_approval';
                 $tool['successful'] = false;
                 if ($resultPreview !== null && $resultPreview !== '') {
@@ -188,45 +191,13 @@ final class AdminAiOpsAssistantTimelineRecorder
     }
 
     /**
-     * 用户已处理当前审批：将同轮其它仍处于 calling / awaiting_approval / executing 的工具标为 rejected，避免界面残留「待确认」。
+     * @deprecated 审批队列模式下不再取消 sibling，保留空实现兼容旧调用。
      *
      * @return list<array{tool_call_id: string, tool_name: string}>
      */
     public function markSiblingPendingToolsRejected(string $activeToolCallId, ?string $reason): array
     {
-        $active = trim($activeToolCallId);
-        $msg = $reason !== null ? trim($reason) : '';
-        $affected = [];
-
-        foreach ($this->segments as &$segment) {
-            if (($segment['kind'] ?? '') !== 'tools' || ! is_array($segment['tools'] ?? null)) {
-                continue;
-            }
-            foreach ($segment['tools'] as &$tool) {
-                $phase = (string) ($tool['phase'] ?? '');
-                if (! in_array($phase, ['calling', 'awaiting_approval', 'executing'], true)) {
-                    continue;
-                }
-                $tid = (string) ($tool['toolCallId'] ?? '');
-                if ($active !== '' && $tid === $active) {
-                    continue;
-                }
-                $tool['phase'] = 'rejected';
-                $tool['successful'] = false;
-                if ($msg !== '') {
-                    $tool['error'] = $msg;
-                }
-                if ($tid !== '') {
-                    $affected[] = [
-                        'tool_call_id' => $tid,
-                        'tool_name' => (string) ($tool['name'] ?? ''),
-                    ];
-                }
-            }
-        }
-        unset($segment, $tool);
-
-        return $affected;
+        return [];
     }
 
     /**

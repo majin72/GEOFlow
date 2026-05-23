@@ -176,22 +176,16 @@ class AdminAiOpsChatService
     ): string {
         $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
         $partial = trim((string) ($snapshot['partial_assistant_text'] ?? ''));
-        $toolOutput = trim((string) ($snapshot['tool_output_text'] ?? ''));
+        $toolOutput = $this->buildDecidedApprovalsSynthesis((int) $run->id);
         if ($toolOutput === '') {
-            $executed = AdminAiOpsToolApproval::query()
-                ->where('run_id', (int) $run->id)
-                ->where('status', 'executed')
-                ->orderByDesc('id')
-                ->first();
-            if ($executed instanceof AdminAiOpsToolApproval) {
-                $toolOutput = trim((string) ($executed->executed_output ?? ''));
-            }
+            $toolOutput = trim((string) ($snapshot['tool_output_text'] ?? ''));
         }
 
         $toolName = '';
         $executedRow = AdminAiOpsToolApproval::query()
             ->where('run_id', (int) $run->id)
             ->where('status', 'executed')
+            ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->first();
         if ($executedRow instanceof AdminAiOpsToolApproval) {
@@ -242,12 +236,14 @@ class AdminAiOpsChatService
         $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
         $partial = trim((string) ($snapshot['partial_assistant_text'] ?? ''));
         $reason = trim($rejectReason) !== '' ? trim($rejectReason) : 'denied by user approval prompt';
+        $batchOutput = $this->buildDecidedApprovalsSynthesis((int) $run->id);
 
         $synthesis = $this->buildResumeSynthesisBlockReject(
             partialAssistantText: $partial,
             toolName: $toolName,
             rejectReason: $reason,
             argsFingerprint: $argsFingerprint,
+            batchToolOutputText: $batchOutput,
         );
 
         $mergedPrior = array_merge($priorConversationMessages, [
@@ -391,18 +387,57 @@ TXT;
     }
 
     /**
+     * 将本轮已决定（执行/拒绝）的全部工具结果合成为续跑上下文。
+     */
+    public function buildDecidedApprovalsSynthesis(int $runId): string
+    {
+        $rows = AdminAiOpsToolApproval::query()
+            ->where('run_id', $runId)
+            ->whereIn('status', ['executed', 'rejected'])
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get();
+
+        if ($rows->isEmpty()) {
+            return '';
+        }
+
+        $blocks = [];
+        foreach ($rows as $row) {
+            $name = (string) $row->tool_name;
+            if ((string) $row->status === 'executed') {
+                $out = trim((string) ($row->executed_output ?? ''));
+                $blocks[] = "工具「{$name}」已批准并执行，返回：\n".($out !== '' ? $out : '（空）');
+            } else {
+                $reason = trim((string) ($row->rejection_reason ?? ''));
+                if ($reason === '') {
+                    $reason = 'denied by user approval prompt';
+                }
+                $blocks[] = "工具「{$name}」已被管理员拒绝。原因：{$reason}";
+            }
+        }
+
+        return implode("\n\n---\n\n", $blocks);
+    }
+
+    /**
      * 构造「拒绝工具」续跑用的合成 user 文本块（语义对齐 tool_result is_error=true）。
      */
-    private function buildResumeSynthesisBlockReject(string $partialAssistantText, string $toolName, string $rejectReason, string $argsFingerprint): string
+    private function buildResumeSynthesisBlockReject(string $partialAssistantText, string $toolName, string $rejectReason, string $argsFingerprint, string $batchToolOutputText = ''): string
     {
         $budget = self::PRIOR_CONVERSATION_CHAR_BUDGET;
-        $partialT = $this->truncateForResumeBudget('中断前助手片段', $partialAssistantText, (int) floor($budget * 0.45));
+        $partialT = $this->truncateForResumeBudget('中断前助手片段', $partialAssistantText, (int) floor($budget * 0.35));
 
         $meta = '工具：'.$toolName."\n".'拒绝原因：'.$rejectReason."\n".'参数指纹：'.$argsFingerprint;
+        $batchT = trim($batchToolOutputText) !== ''
+            ? $this->truncateForResumeBudget('同轮其它工具结果', $batchToolOutputText, (int) floor($budget * 0.35))
+            : '';
+
+        $batchSection = $batchT !== '' ? "\n\n同轮已处理工具汇总：\n---\n{$batchT}\n---" : '';
 
         return <<<TXT
 【等价于 tool_result（is_error=true）】
-{$meta}
+{$meta}{$batchSection}
 
 以下为首轮流式输出片段（可能不完整）：
 ---

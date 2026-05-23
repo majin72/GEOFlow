@@ -45,21 +45,19 @@ class AdminAiOpsAssistantTimelineRecorderApprovalTest extends TestCase
         $this->assertSame('awaiting_approval', $tools[1]['phase']);
     }
 
-    public function test_mark_sibling_pending_tools_rejected_cleans_orphan_awaiting_cards(): void
+    public function test_mark_sibling_pending_tools_rejected_is_noop_in_queue_mode(): void
     {
         $recorder = new AdminAiOpsAssistantTimelineRecorder;
         $recorder->recordToolCalling('tc-a', 'AdminOpsTasksTool', '{"task_id":12}');
         $recorder->recordToolCalling('tc-b', 'AdminOpsTasksTool', '{"task_id":13}');
         $recorder->markCallingToolsAwaitingApproval('pending');
-        $recorder->markToolRejectedByCallId('tc-b', '用户拒绝');
 
         $affected = $recorder->markSiblingPendingToolsRejected('tc-b', '用户拒绝');
         $timeline = $recorder->toArray();
         $tools = $timeline['segments'][0]['tools'];
 
-        $this->assertSame('rejected', $tools[0]['phase']);
-        $this->assertSame('rejected', $tools[1]['phase']);
-        $this->assertCount(1, $affected);
-        $this->assertSame('tc-a', $affected[0]['tool_call_id']);
+        $this->assertSame('awaiting_approval', $tools[0]['phase']);
+        $this->assertSame('awaiting_approval', $tools[1]['phase']);
+        $this->assertSame([], $affected);
     }
 }

@@ -2725,6 +2725,8 @@ return [
         'tool_reject_reason_placeholder' => 'Optional rejection reason (shown to the model)',
         'tool_approval_open' => 'Review',
         'tool_approval_later' => 'Later',
+        'tool_approval_queue' => 'Approval queue: :count item(s) remaining (approve one at a time; do not double-click)',
+        'tool_approval_busy' => 'Processing the previous approval…',
     ],
     'external_fetch' => [
         'page_title' => 'External Browser Fetch',

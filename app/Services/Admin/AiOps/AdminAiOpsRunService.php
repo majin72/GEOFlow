@@ -126,30 +126,35 @@ class AdminAiOpsRunService
 
         $approvalPending = null;
         $assistantPartialPreview = null;
-        if ((string) $run->status === 'awaiting_confirmation') {
-            $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
-            $partial = trim((string) ($snapshot['partial_assistant_text'] ?? ''));
-            if ($partial !== '') {
-                $assistantPartialPreview = Str::limit($partial, 8000, '…');
-            }
+        $snapshot = is_array($run->plan_stream_snapshot) ? $run->plan_stream_snapshot : [];
+        $partial = trim((string) ($snapshot['partial_assistant_text'] ?? ''));
+        if ($partial !== '') {
+            $assistantPartialPreview = Str::limit($partial, 8000, '…');
+        }
 
-            $pendingRow = AdminAiOpsToolApproval::query()
+        $pendingRow = AdminAiOpsToolApproval::query()
+            ->where('run_id', (int) $run->id)
+            ->where('status', 'pending')
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->first();
+
+        if ($pendingRow instanceof AdminAiOpsToolApproval) {
+            $queueRemaining = (int) AdminAiOpsToolApproval::query()
                 ->where('run_id', (int) $run->id)
                 ->where('status', 'pending')
-                ->orderByDesc('id')
-                ->first();
+                ->count();
 
-            if ($pendingRow instanceof AdminAiOpsToolApproval) {
-                $approvalPending = [
-                    'id' => (string) $pendingRow->id,
-                    'tool_name' => (string) $pendingRow->tool_name,
-                    'tool_call_id' => trim((string) ($pendingRow->tool_call_id ?? $snapshot['last_tool_call_id'] ?? '')),
-                    'summary' => $this->approvalSummaryLine($pendingRow),
-                    'expires_at' => $pendingRow->expires_at?->toIso8601String(),
-                    'risk_label' => $pendingRow->risk_label ? (string) $pendingRow->risk_label : null,
-                    'args_fingerprint' => (string) $pendingRow->args_fingerprint,
-                ];
-            }
+            $approvalPending = [
+                'id' => (string) $pendingRow->id,
+                'tool_name' => (string) $pendingRow->tool_name,
+                'tool_call_id' => trim((string) ($pendingRow->tool_call_id ?? $snapshot['last_tool_call_id'] ?? '')),
+                'summary' => $this->approvalSummaryLine($pendingRow),
+                'expires_at' => $pendingRow->expires_at?->toIso8601String(),
+                'risk_label' => $pendingRow->risk_label ? (string) $pendingRow->risk_label : null,
+                'args_fingerprint' => (string) $pendingRow->args_fingerprint,
+                'queue_remaining' => $queueRemaining,
+            ];
         }
 
         $assistantTimeline = null;

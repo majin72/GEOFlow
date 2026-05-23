@@ -2725,6 +2725,8 @@ return [
         'tool_reject_reason_placeholder' => '可选：填写拒绝原因（将反馈给模型）',
         'tool_approval_open' => '去确认',
         'tool_approval_later' => '稍后再说',
+        'tool_approval_queue' => '审批队列：还剩 :count 条待确认（请逐条点击「批准执行」，勿连续连点）',
+        'tool_approval_busy' => '正在处理上一条审批…',
     ],
     'external_fetch' => [
         'page_title' => '外部浏览器抓取',

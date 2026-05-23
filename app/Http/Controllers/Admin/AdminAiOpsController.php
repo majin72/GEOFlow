@@ -297,16 +297,43 @@ class AdminAiOpsController extends Controller
 
                         $assistantText = trim((string) $assistantText);
 
-                        if ($assistantText === '') {
-                            throw new \RuntimeException('模型返回为空');
-                        }
+                        $pendingCount = app(AdminAiOpsToolApprovalService::class)->pendingCountForRun((int) $run->id);
+                        if ($pendingCount > 0) {
+                            $haltedForApproval = true;
+                            $freshRun = AdminAiOpsRun::query()
+                                ->whereKey($runId)
+                                ->with(['steps', 'attachments', 'aiModel'])
+                                ->first();
 
-                        $run = $runs->updateRun($run->fresh() ?? $run, [
-                            'status' => 'completed',
-                            'result_summary' => $assistantText,
-                            'plan_stream_snapshot' => $this->planStreamSnapshotWithTimeline($run->fresh() ?? $run),
-                            'finished_at' => now(),
-                        ]);
+                            if ($freshRun instanceof AdminAiOpsRun && app()->bound(AdminAiOpsStreamContext::class)) {
+                                $runs->persistAssistantTimeline(
+                                    $freshRun,
+                                    app(AdminAiOpsStreamContext::class)->timeline->toArray(),
+                                );
+                                $partial = trim((string) app(AdminAiOpsStreamContext::class)->partialAssistantText);
+                                if ($partial !== '') {
+                                    $snapshot = is_array($freshRun->plan_stream_snapshot) ? $freshRun->plan_stream_snapshot : [];
+                                    $snapshot['partial_assistant_text'] = $partial;
+                                    $runs->updateRun($freshRun, [
+                                        'status' => 'awaiting_confirmation',
+                                        'plan_stream_snapshot' => $snapshot,
+                                    ]);
+                                    $freshRun = $freshRun->fresh() ?? $freshRun;
+                                }
+                            }
+
+                            $this->emitAdminAiOpsFirstPendingApprovalRequired((int) $runId);
+                            $this->writeAdminAiOpsSseRunEvent($runs->payload($freshRun instanceof AdminAiOpsRun ? $freshRun : $run));
+                        } elseif ($assistantText === '') {
+                            throw new \RuntimeException('模型返回为空');
+                        } else {
+                            $run = $runs->updateRun($run->fresh() ?? $run, [
+                                'status' => 'completed',
+                                'result_summary' => $assistantText,
+                                'plan_stream_snapshot' => $this->planStreamSnapshotWithTimeline($run->fresh() ?? $run),
+                                'finished_at' => now(),
+                            ]);
+                        }
                     } catch (AdminAiOpsToolApprovalPendingException $e) {
                         $haltedForApproval = true;
                         $this->emitAdminAiOpsSseSyntheticToolDoneForPendingApproval($e);
@@ -406,6 +433,8 @@ class AdminAiOpsController extends Controller
         return response()->json([
             'ok' => true,
             'resume_stream_url' => $out['resume_stream_url'],
+            'next_approval' => $out['next_approval'] ?? null,
+            'queue_remaining' => (int) ($out['queue_remaining'] ?? 0),
             'already_executed' => $out['already_executed'],
             'executed_this_request' => $out['executed_this_request'],
             'executed_ok' => $executedOk,
@@ -449,6 +478,8 @@ class AdminAiOpsController extends Controller
         return response()->json([
             'ok' => true,
             'reject_resume_stream_url' => $out['reject_resume_stream_url'],
+            'next_approval' => $out['next_approval'] ?? null,
+            'queue_remaining' => (int) ($out['queue_remaining'] ?? 0),
             'run' => $runs->payload($run),
         ]);
     }
@@ -535,6 +566,18 @@ class AdminAiOpsController extends Controller
                     return;
                 }
 
+                if ($approvals->pendingCountForRun((int) $runId) > 0) {
+                    $run = $runs->updateRun($run->fresh() ?? $run, [
+                        'status' => 'awaiting_confirmation',
+                        'plan_stream_snapshot' => $this->planStreamSnapshotWithTimeline($run->fresh() ?? $run),
+                    ]);
+                    $this->emitAdminAiOpsFirstPendingApprovalRequired((int) $runId);
+                    $this->writeAdminAiOpsSseRunEvent($runs->payload($run->fresh(['steps', 'attachments', 'aiModel']) ?? $run));
+                    $this->writeAdminAiOpsSseDoneEvent();
+
+                    return;
+                }
+
                 $aiModel = $run->aiModel;
                 if (! $aiModel instanceof AiModel) {
                     $run = $runs->updateRun($run->fresh() ?? $run, [
@@ -613,19 +656,40 @@ class AdminAiOpsController extends Controller
                     }
 
                     $assistantText = trim((string) $assistantText);
-                    if ($assistantText === '') {
+                    $pendingCount = $approvals->pendingCountForRun((int) $run->id);
+                    if ($pendingCount > 0) {
+                        $snapshotRun = $run->fresh() ?? $run;
+                        $partial = app()->bound(AdminAiOpsStreamContext::class)
+                            ? trim((string) app(AdminAiOpsStreamContext::class)->partialAssistantText)
+                            : '';
+                        if ($partial !== '') {
+                            $snapshot = is_array($snapshotRun->plan_stream_snapshot) ? $snapshotRun->plan_stream_snapshot : [];
+                            $snapshot['partial_assistant_text'] = $partial;
+                            $snapshotRun = $runs->updateRun($snapshotRun, [
+                                'status' => 'awaiting_confirmation',
+                                'plan_stream_snapshot' => $snapshot,
+                            ]);
+                        } else {
+                            $snapshotRun = $runs->updateRun($snapshotRun, [
+                                'status' => 'awaiting_confirmation',
+                                'plan_stream_snapshot' => $this->planStreamSnapshotWithTimeline($snapshotRun),
+                            ]);
+                        }
+                        $this->emitAdminAiOpsFirstPendingApprovalRequired((int) $run->id);
+                        $run = $snapshotRun;
+                    } elseif ($assistantText === '') {
                         throw new \RuntimeException('模型返回为空');
+                    } else {
+                        $snapshotRun = $run->fresh() ?? $run;
+                        $mergedSummary = $this->mergeAiOpsPartialAssistantWithResumeSummary($snapshotRun, $assistantText);
+
+                        $run = $runs->updateRun($snapshotRun, [
+                            'status' => 'completed',
+                            'result_summary' => $mergedSummary,
+                            'plan_stream_snapshot' => $this->planStreamSnapshotWithTimeline($snapshotRun),
+                            'finished_at' => now(),
+                        ]);
                     }
-
-                    $snapshotRun = $run->fresh() ?? $run;
-                    $mergedSummary = $this->mergeAiOpsPartialAssistantWithResumeSummary($snapshotRun, $assistantText);
-
-                    $run = $runs->updateRun($snapshotRun, [
-                        'status' => 'completed',
-                        'result_summary' => $mergedSummary,
-                        'plan_stream_snapshot' => $this->planStreamSnapshotWithTimeline($snapshotRun),
-                        'finished_at' => now(),
-                    ]);
                 } catch (Throwable $e) {
                     $human = OpenAiRuntimeProvider::normalizeApiException($e, $providerUrl);
                     $run = $runs->updateRun($run->fresh() ?? $run, [
@@ -875,27 +939,72 @@ class AdminAiOpsController extends Controller
         }
         $this->writeAdminAiOpsSseJsonEvent('tool', $payload);
 
-        $cancelReason = (string) __('admin.ai_ops.tool_sibling_cancelled_on_approval');
-        foreach (app(AdminAiOpsStreamContext::class)->timeline->markSiblingPendingToolsRejected($toolCallId, $cancelReason) as $sibling) {
-            $siblingId = trim((string) ($sibling['tool_call_id'] ?? ''));
-            if ($siblingId === '') {
-                continue;
-            }
-            $this->writeAdminAiOpsSseJsonEvent('tool', [
-                'phase' => 'rejected',
-                'tool_call_id' => $siblingId,
-                'tool_name' => (string) ($sibling['tool_name'] ?? ''),
-                'successful' => false,
-                'error' => $cancelReason,
-                'result_preview' => $cancelReason,
-            ]);
-        }
-
         $this->writeAdminAiOpsSseJsonEvent('stream_status', [
             'kind' => 'post_tool_model_round',
             'tool_name' => (string) $approval->tool_name,
             'successful' => $successful,
         ]);
+    }
+
+    /**
+     * 向 SSE 推送队列中第一条 pending 审批（同轮多写工具逐条确认）。
+     */
+    private function emitAdminAiOpsFirstPendingApprovalRequired(int $runId): void
+    {
+        $approvals = app(AdminAiOpsToolApprovalService::class);
+        $pending = $approvals->firstPendingForRun($runId);
+        if (! $pending instanceof AdminAiOpsToolApproval) {
+            return;
+        }
+
+        $payload = $approvals->formatApprovalPayload($pending);
+        $this->writeAdminAiOpsSseJsonEvent('approval_required', [
+            'approval_id' => $payload['id'],
+            'tool_call_id' => $payload['tool_call_id'],
+            'tool_name' => $payload['tool_name'],
+            'summary' => $payload['summary'],
+            'expires_at' => $payload['expires_at'],
+            'fingerprint' => $payload['fingerprint'],
+            'queue_remaining' => $payload['queue_remaining'],
+        ]);
+    }
+
+    /**
+     * 从工具返回体解析 pending 审批 id。
+     */
+    private function adminAiOpsApprovalIdFromToolResult(mixed $result): string
+    {
+        if (is_string($result)) {
+            $decoded = json_decode($result, true);
+        } elseif (is_array($result)) {
+            $decoded = $result;
+        } else {
+            return '';
+        }
+
+        if (! is_array($decoded)) {
+            return '';
+        }
+
+        return trim((string) ($decoded['approval_id'] ?? ''));
+    }
+
+    /**
+     * 判断工具返回体是否表示「已挂起待人工审批」。
+     */
+    private function adminAiOpsToolResultIsPendingApproval(mixed $result): bool
+    {
+        if (is_string($result)) {
+            $decoded = json_decode($result, true);
+
+            return is_array($decoded) && ! empty($decoded['pending_user_approval']);
+        }
+
+        if (is_array($result)) {
+            return ! empty($result['pending_user_approval']);
+        }
+
+        return false;
     }
 
     /**
@@ -955,21 +1064,6 @@ class AdminAiOpsController extends Controller
             'error' => $reason,
             'result_preview' => $reason,
         ]);
-
-        foreach ($ctx->timeline->markSiblingPendingToolsRejected($toolCallId, $reason) as $sibling) {
-            $siblingId = trim((string) ($sibling['tool_call_id'] ?? ''));
-            if ($siblingId === '') {
-                continue;
-            }
-            $this->writeAdminAiOpsSseJsonEvent('tool', [
-                'phase' => 'rejected',
-                'tool_call_id' => $siblingId,
-                'tool_name' => (string) ($sibling['tool_name'] ?? ''),
-                'successful' => false,
-                'error' => $reason,
-                'result_preview' => $reason,
-            ]);
-        }
     }
 
     /**
@@ -1008,36 +1102,57 @@ class AdminAiOpsController extends Controller
         }
 
         if ($event instanceof AiStreamToolResult) {
-            $resultPreview = $this->adminAiOpsSseToolResultDataPreview($event->toolResult->result);
-            $rawOutput = $this->adminAiOpsSseToolRawOutput($event->toolResult->result);
+            $pendingApproval = $this->adminAiOpsToolResultIsPendingApproval($event->toolResult->result);
+            $previewMessage = (string) __('admin.ai_ops.tool_pending_approval_result_preview');
+            $resultPreview = $pendingApproval
+                ? $previewMessage
+                : $this->adminAiOpsSseToolResultDataPreview($event->toolResult->result);
+            $rawOutput = $pendingApproval ? null : $this->adminAiOpsSseToolRawOutput($event->toolResult->result);
             if (app()->bound(AdminAiOpsStreamContext::class)) {
-                app(AdminAiOpsStreamContext::class)->timeline->recordToolDone(
-                    (string) $event->toolResult->id,
-                    (string) $event->toolResult->name,
-                    (bool) $event->successful,
-                    (string) ($event->error ?? ''),
-                    $resultPreview,
-                    null,
-                    $rawOutput,
-                );
+                $ctx = app(AdminAiOpsStreamContext::class);
+                if ($pendingApproval) {
+                    $approvalIdFromResult = $this->adminAiOpsApprovalIdFromToolResult($event->toolResult->result);
+                    if ($approvalIdFromResult !== '') {
+                        app(AdminAiOpsToolApprovalService::class)->syncToolCallId(
+                            $approvalIdFromResult,
+                            (string) $event->toolResult->id,
+                        );
+                    }
+                    $ctx->timeline->markToolAwaitingApprovalByCallId(
+                        (string) $event->toolResult->id,
+                        $previewMessage,
+                    );
+                } else {
+                    $ctx->timeline->recordToolDone(
+                        (string) $event->toolResult->id,
+                        (string) $event->toolResult->name,
+                        (bool) $event->successful,
+                        (string) ($event->error ?? ''),
+                        $resultPreview,
+                        null,
+                        $rawOutput,
+                    );
+                }
             }
             $payload = [
-                'phase' => 'done',
+                'phase' => $pendingApproval ? 'awaiting_approval' : 'done',
                 'tool_call_id' => $event->toolResult->id,
                 'tool_name' => $event->toolResult->name,
-                'successful' => $event->successful,
-                'error' => $event->error,
+                'successful' => $pendingApproval ? false : (bool) $event->successful,
+                'error' => $pendingApproval ? '' : $event->error,
                 'result_preview' => $resultPreview,
             ];
             if ($rawOutput !== null && $rawOutput !== '') {
                 $payload['raw_output'] = $rawOutput;
             }
             $this->writeAdminAiOpsSseJsonEvent('tool', $payload);
-            $this->writeAdminAiOpsSseJsonEvent('stream_status', [
-                'kind' => 'post_tool_model_round',
-                'tool_name' => $event->toolResult->name,
-                'successful' => $event->successful,
-            ]);
+            if (! $pendingApproval) {
+                $this->writeAdminAiOpsSseJsonEvent('stream_status', [
+                    'kind' => 'post_tool_model_round',
+                    'tool_name' => $event->toolResult->name,
+                    'successful' => $event->successful,
+                ]);
+            }
 
             return;
         }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Admin\AdminOps\AdminAction;
 
+use App\Exceptions\ApiException;
 use App\Http\Controllers\Admin\TaskController;
 use App\Models\AiModel;
 use App\Models\Author;
@@ -244,24 +245,35 @@ final class AdminOpsMirrorTasksHandler
     }
 
     /**
-     * 更新任务。
+     * 更新任务（支持局部字段；底层 {@see TaskLifecycleService::updateTask} 仅改传入项）。
      *
      * @param  array<string, mixed>  $payload
-     * @return array{ok: bool, error?: string, validation_errors?: array<string, mixed>}
+     * @return array{ok: bool, error?: string, validation_errors?: array<string, mixed>|null, task?: array<string, mixed>}
      */
     public function update(int $taskId, array $payload): array
     {
-        if (! Category::query()->exists()) {
-            return ['ok' => false, 'error' => '尚未配置任何栏目，请先创建栏目。'];
+        if ($taskId <= 0) {
+            return ['ok' => false, 'error' => '无效 task_id'];
         }
-        $validated = $this->validateTaskPayload($payload);
-        if ($validated === null) {
-            return ['ok' => false, 'error' => '校验未通过', 'validation_errors' => $this->lastTaskValidationErrors];
-        }
-        try {
-            $this->taskLifecycleService->updateTask($taskId, $validated);
 
-            return ['ok' => true];
+        $lifecycleData = $this->mapMirrorPayloadToLifecycle($payload);
+        if ($lifecycleData === []) {
+            return ['ok' => false, 'error' => '没有可更新的字段'];
+        }
+
+        try {
+            $task = $this->taskLifecycleService->updateTask($taskId, $lifecycleData);
+
+            return ['ok' => true, 'task' => $task];
+        } catch (ApiException $e) {
+            $details = $e->getDetails();
+            $fieldErrors = is_array($details['field_errors'] ?? null) ? $details['field_errors'] : [];
+
+            return [
+                'ok' => false,
+                'error' => $e->getMessage(),
+                'validation_errors' => $fieldErrors !== [] ? $fieldErrors : null,
+            ];
         } catch (Throwable $e) {
             return ['ok' => false, 'error' => $e->getMessage()];
         }
@@ -269,6 +281,74 @@ final class AdminOpsMirrorTasksHandler
 
     /** @var array<string, mixed> */
     private array $lastTaskValidationErrors = [];
+
+    /**
+     * 将 Mirror payload 转为 TaskLifecycleService 局部更新字段。
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function mapMirrorPayloadToLifecycle(array $payload): array
+    {
+        $out = [];
+        if (array_key_exists('task_name', $payload)) {
+            $out['name'] = trim((string) $payload['task_name']);
+        }
+        if (array_key_exists('title_library_id', $payload)) {
+            $out['title_library_id'] = (int) $payload['title_library_id'];
+        }
+        if (array_key_exists('prompt_id', $payload)) {
+            $out['prompt_id'] = (int) $payload['prompt_id'];
+        }
+        if (array_key_exists('ai_model_id', $payload)) {
+            $out['ai_model_id'] = (int) $payload['ai_model_id'];
+        }
+        if (array_key_exists('author_id', $payload)) {
+            $raw = $payload['author_id'];
+            $out['author_id'] = $raw === null || $raw === '' || (int) $raw <= 0 ? null : (int) $raw;
+        }
+        if (array_key_exists('image_library_id', $payload)) {
+            $raw = $payload['image_library_id'];
+            $out['image_library_id'] = $raw === null || $raw === '' || (int) $raw <= 0 ? null : (int) $raw;
+        }
+        if (array_key_exists('image_count', $payload)) {
+            $out['image_count'] = (int) $payload['image_count'];
+        }
+        if (array_key_exists('knowledge_base_id', $payload)) {
+            $raw = $payload['knowledge_base_id'];
+            $out['knowledge_base_id'] = $raw === null || $raw === '' || (int) $raw <= 0 ? null : (int) $raw;
+        }
+        if (array_key_exists('fixed_category_id', $payload)) {
+            $raw = $payload['fixed_category_id'];
+            $out['fixed_category_id'] = $raw === null || $raw === '' || (int) $raw <= 0 ? null : (int) $raw;
+        }
+        if (array_key_exists('status', $payload)) {
+            $out['status'] = (string) $payload['status'];
+        }
+        if (array_key_exists('article_limit', $payload)) {
+            $out['article_limit'] = (int) $payload['article_limit'];
+        }
+        if (array_key_exists('draft_limit', $payload)) {
+            $out['draft_limit'] = (int) $payload['draft_limit'];
+        }
+        if (array_key_exists('publish_interval', $payload)) {
+            $out['publish_interval'] = max(60, max(1, (int) $payload['publish_interval']) * 60);
+        }
+        if (array_key_exists('category_mode', $payload)) {
+            $mode = (string) $payload['category_mode'];
+            $out['category_mode'] = $mode === 'random' ? 'smart' : $mode;
+        }
+        if (array_key_exists('model_selection_mode', $payload)) {
+            $out['model_selection_mode'] = (string) $payload['model_selection_mode'];
+        }
+        foreach (['need_review', 'is_loop', 'auto_keywords', 'auto_description'] as $flag) {
+            if (array_key_exists($flag, $payload)) {
+                $out[$flag] = $this->parseOptionalFlag([$flag => $payload[$flag]], $flag, false) ? 1 : 0;
+            }
+        }
+
+        return $out;
+    }
 
     /**
      * @param  array<string, mixed>  $payload

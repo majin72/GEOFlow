@@ -427,6 +427,166 @@ const root = document.getElementById('admin-ai-ops-page');
         }
 
         /**
+         * 工具卡片 phase 优先级（高者不应被低者覆盖）。
+         *
+         * @param {string} phase
+         * @returns {number}
+         */
+        function toolPhaseRank(phase) {
+            switch (String(phase || '')) {
+                case 'done':
+                    return 50;
+                case 'rejected':
+                    return 40;
+                case 'executing':
+                    return 30;
+                case 'awaiting_approval':
+                    return 20;
+                case 'calling':
+                    return 10;
+                default:
+                    return 0;
+            }
+        }
+
+        /**
+         * @param {string} from
+         * @param {string} to
+         * @returns {boolean}
+         */
+        function canTransitionToolPhase(from, to) {
+            const current = String(from || '');
+            const next = String(to || '');
+            if (current === next) {
+                return true;
+            }
+            if (current === 'done' || current === 'rejected') {
+                return false;
+            }
+            return toolPhaseRank(next) >= toolPhaseRank(current);
+        }
+
+        /**
+         * 合并两条时间线中同一 tool_call_id 的状态，保留更高优先级 phase。
+         *
+         * @param {object|null} base
+         * @param {object|null} incoming
+         * @returns {object|null}
+         */
+        function mergeAssistantTimelinePhases(base, incoming) {
+            if (!base && !incoming) {
+                return null;
+            }
+            if (!base) {
+                return cloneTimelineSnapshot(incoming);
+            }
+            if (!incoming) {
+                return cloneTimelineSnapshot(base);
+            }
+            const merged = cloneTimelineSnapshot(base);
+            const incomingMap = new Map();
+            collectTimelineToolsFlat(incoming).forEach((tool) => {
+                const id = String(tool.toolCallId || '').trim();
+                if (id) {
+                    incomingMap.set(id, tool);
+                }
+            });
+            (merged.segments || []).forEach((seg) => {
+                if (seg.kind !== 'tools' || !Array.isArray(seg.tools)) {
+                    return;
+                }
+                seg.tools.forEach((tool) => {
+                    const id = String(tool.toolCallId || '').trim();
+                    if (!id || !incomingMap.has(id)) {
+                        return;
+                    }
+                    const src = incomingMap.get(id);
+                    if (toolPhaseRank(src.phase) > toolPhaseRank(tool.phase)) {
+                        Object.assign(tool, cloneToolRow(src));
+                    }
+                });
+            });
+            return merged;
+        }
+
+        /**
+         * @param {object} tool
+         * @returns {object}
+         */
+        function cloneToolRow(tool) {
+            return {
+                toolCallId: tool.toolCallId,
+                name: tool.name,
+                phase: tool.phase,
+                successful: tool.successful,
+                error: tool.error,
+                resultPreview: tool.resultPreview,
+                argumentsPreview: tool.argumentsPreview,
+                durationMs: tool.durationMs,
+                rawOutput: tool.rawOutput,
+                calledAt: tool.calledAt,
+            };
+        }
+
+        /**
+         * @param {object|null} timeline
+         * @returns {object|null}
+         */
+        function cloneTimelineSnapshot(timeline) {
+            if (!timeline || typeof timeline !== 'object') {
+                return null;
+            }
+            return {
+                completedRounds: Array.isArray(timeline.completedRounds)
+                    ? timeline.completedRounds.map((round) => ({
+                        segments: cloneTimelineSegments(round.segments || []),
+                    }))
+                    : [],
+                segments: cloneTimelineSegments(timeline.segments || []),
+            };
+        }
+
+        /**
+         * @param {object|null} timeline
+         * @returns {Array<object>}
+         */
+        function collectTimelineToolsFlat(timeline) {
+            const out = [];
+            if (!timeline || !Array.isArray(timeline.segments)) {
+                return out;
+            }
+            timeline.segments.forEach((seg) => {
+                if (seg.kind === 'tools' && Array.isArray(seg.tools)) {
+                    seg.tools.forEach((tool) => out.push(tool));
+                }
+            });
+            return out;
+        }
+
+        /**
+         * 将服务端时间线 phase 合并进 live 缓冲（server 终态优先）。
+         *
+         * @param {number|string} runId
+         * @param {object|null} serverTimeline
+         */
+        function mergeServerTimelineIntoLiveBuffer(runId, serverTimeline) {
+            if (!serverTimeline || !timelineHasDisplayableContent(serverTimeline)) {
+                return;
+            }
+            const id = String(runId);
+            const live = ensureLiveStruct(runId);
+            const normalized = normalizeLiveSnapshot(runId);
+            const merged = mergeAssistantTimelinePhases(normalized, serverTimeline);
+            if (merged) {
+                state.liveByRunId[id] = {
+                    ...live,
+                    segments: cloneTimelineSegments(merged.segments || []),
+                    completedRounds: [],
+                };
+            }
+        }
+
+        /**
          * @param {object} live
          * @param {string} toolCallId
          * @param {string} phase
@@ -439,6 +599,9 @@ const root = document.getElementById('admin-ai-ops-page');
                 row = findLastPendingApprovalToolRow(live, toolName);
             }
             if (!row) {
+                return;
+            }
+            if (!canTransitionToolPhase(row.phase, phase)) {
                 return;
             }
             row.phase = phase;
@@ -461,6 +624,9 @@ const root = document.getElementById('admin-ai-ops-page');
             const rp = data.result_preview != null ? String(data.result_preview) : '';
             const row = tid ? findToolRowByCallId(live, tid) : findLastPendingApprovalToolRow(live, toolName);
             if (row) {
+                if (!canTransitionToolPhase(row.phase, 'done')) {
+                    return;
+                }
                 row.phase = 'done';
                 row.successful = !!data.successful;
                 row.error = data.error ? String(data.error) : '';
@@ -870,6 +1036,9 @@ const root = document.getElementById('admin-ai-ops-page');
 
         let pendingApprovalCtx = null;
 
+        /** @type {Record<string, boolean>} */
+        const approvalRequestInFlightByRunId = {};
+
         /** @type {Record<string, string>} */
         const approvalToolCallByRunId = {};
 
@@ -926,13 +1095,13 @@ const root = document.getElementById('admin-ai-ops-page');
          */
         function resolveLiveTimelineForRun(run) {
             const runId = String(run.id);
+            const persisted = assistantTimelineFromRun(run);
             if (Object.prototype.hasOwnProperty.call(state.liveByRunId, runId)) {
                 const buf = normalizeLiveSnapshot(run.id);
                 if (timelineHasDisplayableContent(buf)) {
-                    return buf;
+                    return mergeAssistantTimelinePhases(buf, persisted) || buf;
                 }
             }
-            const persisted = assistantTimelineFromRun(run);
             if (persisted && timelineHasDisplayableContent(persisted)) {
                 return persisted;
             }
@@ -965,6 +1134,53 @@ const root = document.getElementById('admin-ai-ops-page');
             };
         }
 
+        function formatApprovalQueueLabel(count) {
+            const n = Number(count || 0);
+            if (!Number.isFinite(n) || n <= 0) {
+                return '';
+            }
+            return String(text.toolApprovalQueue || '').replace(':count', String(n));
+        }
+
+        /**
+         * 设置审批 Modal 按钮可用状态。
+         *
+         * @param {boolean} busy
+         */
+        function setApprovalModalBusy(busy) {
+            const approveBtn = document.getElementById('ai-ops-tool-approval-approve-btn');
+            const rejectBtn = document.getElementById('ai-ops-tool-approval-reject-btn');
+            [approveBtn, rejectBtn].forEach((btn) => {
+                if (!btn) return;
+                btn.disabled = !!busy;
+                btn.classList.toggle('opacity-60', !!busy);
+                btn.classList.toggle('cursor-not-allowed', !!busy);
+            });
+        }
+
+        /**
+         * 渲染 run 顶部审批横幅（有 pending 即显示，不受 run 终态影响）。
+         *
+         * @param {object} run
+         * @returns {string}
+         */
+        function renderApprovalPendingBanner(run) {
+            if (!run?.approval_pending) {
+                return '';
+            }
+            const ap = run.approval_pending;
+            const queueHint = formatApprovalQueueLabel(ap.queue_remaining);
+            return `<div class="mb-3 rounded-xl border border-amber-200 bg-amber-50/95 p-3 text-xs text-amber-950 shadow-inner">
+                <div class="font-semibold">${escapeHtml(text.toolApprovalBanner)}</div>
+                ${queueHint ? `<div class="mt-1 text-[11px] font-medium text-amber-900/90">${escapeHtml(queueHint)}</div>` : ''}
+                <div class="mt-1.5 leading-relaxed">${escapeHtml(String(ap.summary || ''))}</div>
+                <div class="mt-2 text-[11px] text-amber-900/80">${escapeHtml(text.toolApprovalExpires)}：${escapeHtml(String(ap.expires_at || '—'))}</div>
+                <div class="mt-2">
+                    <button type="button" class="ai-ops-open-tool-approval inline-flex items-center rounded-lg bg-amber-900 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:bg-amber-950" data-run-id="${run.id}">${escapeHtml(text.toolApprovalOpen)}</button>
+                </div>
+            </div>`;
+        }
+
         function showToolApprovalModal(runId, payload) {
             const approvalId = String(payload.id || payload.approval_id || '');
             const rid = Number(runId);
@@ -980,17 +1196,30 @@ const root = document.getElementById('admin-ai-ops-page');
                 summary: String(payload.summary || ''),
                 expiresAt: String(payload.expires_at || ''),
                 fingerprint: String(payload.fingerprint || payload.args_fingerprint || ''),
+                queueRemaining: Number(payload.queue_remaining || 0),
             };
             const toolEl = document.getElementById('ai-ops-tool-approval-tool');
             if (toolEl) toolEl.textContent = pendingApprovalCtx.toolName;
             const sum = document.getElementById('ai-ops-tool-approval-summary');
             if (sum) sum.textContent = pendingApprovalCtx.summary;
+            const queueEl = document.getElementById('ai-ops-tool-approval-queue');
+            const queueLabel = formatApprovalQueueLabel(pendingApprovalCtx.queueRemaining);
+            if (queueEl) {
+                if (queueLabel) {
+                    queueEl.textContent = queueLabel;
+                    queueEl.classList.remove('hidden');
+                } else {
+                    queueEl.textContent = '';
+                    queueEl.classList.add('hidden');
+                }
+            }
             const ex = document.getElementById('ai-ops-tool-approval-expires');
             if (ex) ex.textContent = pendingApprovalCtx.expiresAt || '—';
             const fp = document.getElementById('ai-ops-tool-approval-fp');
             if (fp) fp.textContent = pendingApprovalCtx.fingerprint || '—';
             const ta = document.getElementById('ai-ops-tool-approval-reason');
             if (ta) ta.value = '';
+            setApprovalModalBusy(false);
             const modal = document.getElementById('ai-ops-tool-approval-modal');
             if (modal) {
                 modal.classList.remove('hidden');
@@ -1001,6 +1230,7 @@ const root = document.getElementById('admin-ai-ops-page');
 
         function hideToolApprovalModal() {
             pendingApprovalCtx = null;
+            setApprovalModalBusy(false);
             const modal = document.getElementById('ai-ops-tool-approval-modal');
             if (modal) {
                 modal.classList.add('hidden');
@@ -1067,7 +1297,7 @@ const root = document.getElementById('admin-ai-ops-page');
                 return;
             }
             const row = findToolRowByCallId(live, tid);
-            if (!row || row.phase !== 'calling') {
+            if (!row || !canTransitionToolPhase(row.phase, 'awaiting_approval')) {
                 return;
             }
             row.phase = 'awaiting_approval';
@@ -1076,27 +1306,6 @@ const root = document.getElementById('admin-ai-ops-page');
             if (pv) {
                 row.resultPreview = pv;
             }
-        }
-
-        /**
-         * 用户已处理当前审批：收尾同轮其它 calling / awaiting_approval / executing 工具，避免残留「待确认」。
-         *
-         * @param {object} live
-         * @param {string} activeToolCallId
-         * @param {string} reason
-         */
-        function markSiblingPendingToolsRejected(live, activeToolCallId, reason) {
-            const active = String(activeToolCallId || '').trim();
-            const msg = String(reason || '').trim() || text.toolPhaseRejected;
-            collectLiveToolsFlat(live).forEach((t) => {
-                if (!['calling', 'awaiting_approval', 'executing'].includes(t.phase)) {
-                    return;
-                }
-                if (active && String(t.toolCallId || '') === active) {
-                    return;
-                }
-                markToolRejectedByCallId(live, String(t.toolCallId || ''), msg);
-            });
         }
 
         /**
@@ -1117,6 +1326,9 @@ const root = document.getElementById('admin-ai-ops-page');
                     row = findToolRowByCallId(live, tid);
                 }
                 if (row) {
+                    if (!canTransitionToolPhase(row.phase, 'awaiting_approval')) {
+                        return;
+                    }
                     row.phase = 'awaiting_approval';
                     row.successful = false;
                     const rp = data.result_preview != null ? String(data.result_preview) : '';
@@ -1156,6 +1368,7 @@ const root = document.getElementById('admin-ai-ops-page');
                         summary: data.summary,
                         expires_at: data.expires_at,
                         fingerprint: data.fingerprint,
+                        queue_remaining: data.queue_remaining || 0,
                     });
                 } catch (err) {
                     console.warn('ai-ops sse approval_required', err);
@@ -1259,7 +1472,10 @@ const root = document.getElementById('admin-ai-ops-page');
                                 } };
                             }
                         }
-                        delete state.liveByRunId[String(run.id)];
+                        const keepLiveBuffer = !!run.approval_pending;
+                        if (!keepLiveBuffer) {
+                            delete state.liveByRunId[String(run.id)];
+                        }
                     }
                     const runs = [...state.currentSession.runs];
                     const idx = runs.findIndex((r) => Number(r.id) === Number(run.id));
@@ -1461,8 +1677,12 @@ const root = document.getElementById('admin-ai-ops-page');
                 const live = resolveLiveTimelineForRun(run);
                 let bodyInner = '';
                 if (st === 'completed') {
+                    const approvalBanner = renderApprovalPendingBanner(run);
+                    if (approvalBanner) {
+                        bodyInner = approvalBanner;
+                    }
                     if (timelineHasDisplayableContent(live)) {
-                        bodyInner = buildAssistantLiveBodyHtml(st, live);
+                        bodyInner += buildAssistantLiveBodyHtml(st, live);
                     }
                     if (!bodyInner.trim() && run.client_ai_ops_body_html) {
                         bodyInner = run.client_ai_ops_body_html;
@@ -1478,16 +1698,9 @@ const root = document.getElementById('admin-ai-ops-page');
                     bodyInner = `<div class="whitespace-pre-wrap break-words">${escapeHtml(String(run.error_message || '').trim() || statusLabel('failed'))}</div>`;
                 } else if (st === 'awaiting_confirmation') {
                     const chunks = [];
-                    if (run.approval_pending) {
-                        const ap = run.approval_pending;
-                        chunks.push(`<div class="mb-3 rounded-xl border border-amber-200 bg-amber-50/95 p-3 text-xs text-amber-950 shadow-inner">
-                            <div class="font-semibold">${escapeHtml(text.toolApprovalBanner)}</div>
-                            <div class="mt-1.5 leading-relaxed">${escapeHtml(String(ap.summary || ''))}</div>
-                            <div class="mt-2 text-[11px] text-amber-900/80">${escapeHtml(text.toolApprovalExpires)}：${escapeHtml(String(ap.expires_at || '—'))}</div>
-                            <div class="mt-2">
-                                <button type="button" class="ai-ops-open-tool-approval inline-flex items-center rounded-lg bg-amber-900 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:bg-amber-950" data-run-id="${run.id}">${escapeHtml(text.toolApprovalOpen)}</button>
-                            </div>
-                        </div>`);
+                    const approvalBanner = renderApprovalPendingBanner(run);
+                    if (approvalBanner) {
+                        chunks.push(approvalBanner);
                     }
                     if (run.assistant_partial_preview) {
                         chunks.push(`<details class="mb-2 rounded-lg border border-slate-200 bg-slate-50/80 p-2 text-[11px] text-slate-700">
@@ -1554,8 +1767,14 @@ const root = document.getElementById('admin-ai-ops-page');
                     }
                     const oldTlScore = timelineContentScore(old.assistant_timeline);
                     const newTlScore = timelineContentScore(r.assistant_timeline);
-                    if (old.assistant_timeline && (!r.assistant_timeline || newTlScore < oldTlScore)) {
+                    const mergedTimeline = mergeAssistantTimelinePhases(r.assistant_timeline, old.assistant_timeline);
+                    if (mergedTimeline) {
+                        merged.assistant_timeline = mergedTimeline;
+                    } else if (old.assistant_timeline && (!r.assistant_timeline || newTlScore < oldTlScore)) {
                         merged.assistant_timeline = old.assistant_timeline;
+                    }
+                    if (Object.prototype.hasOwnProperty.call(state.liveByRunId, String(r.id)) && merged.assistant_timeline) {
+                        mergeServerTimelineIntoLiveBuffer(r.id, merged.assistant_timeline);
                     }
                     const oSum = String(old.result_summary || '').trim();
                     const nSum = String(r.result_summary || '').trim();
@@ -1638,9 +1857,85 @@ const root = document.getElementById('admin-ai-ops-page');
             }
         });
 
+        function openNextApprovalFromResponse(runId, payload) {
+            if (!payload || !payload.id) {
+                return false;
+            }
+            showToolApprovalModal(Number(runId), {
+                id: payload.id,
+                approval_id: payload.id,
+                tool_call_id: payload.tool_call_id || '',
+                tool_name: payload.tool_name || '',
+                summary: payload.summary || '',
+                expires_at: payload.expires_at || '',
+                fingerprint: payload.fingerprint || '',
+                queue_remaining: payload.queue_remaining || 0,
+            });
+            return true;
+        }
+
+        function finishApprovalHttpResponse(res, rid, toolName, toolCallId, streamUrlKey) {
+            const liveAfter = ensureLiveStruct(rid);
+            const resolvedId = resolveApprovalToolCallId(liveAfter, rid, toolCallId, toolName);
+            if (resolvedId && res && res.executed_this_request) {
+                const okPreview = res.executed_output_preview != null ? String(res.executed_output_preview) : '';
+                const successful = res.executed_ok !== false;
+                recordToolDoneToLive(liveAfter, {
+                    phase: 'done',
+                    tool_call_id: resolvedId,
+                    tool_name: toolName,
+                    successful,
+                    result_preview: okPreview,
+                });
+            }
+            if (res && res.run && state.currentSession?.runs) {
+                const runs = [...state.currentSession.runs];
+                const idx = runs.findIndex((r) => Number(r.id) === Number(res.run.id));
+                if (idx >= 0) {
+                    const merged = { ...res.run };
+                    const serverTimeline = merged.assistant_timeline || null;
+                    delete merged.assistant_timeline;
+                    runs[idx] = merged;
+                    if (serverTimeline) {
+                        mergeServerTimelineIntoLiveBuffer(runs[idx].id, serverTimeline);
+                    }
+                    syncRunAssistantTimelineFromLiveBuffer(runs[idx]);
+                }
+                state.currentSession.runs = runs;
+                renderTranscript();
+                updateHeaderFromSession();
+            }
+            const queueRemaining = res && typeof res.queue_remaining === 'number' ? Number(res.queue_remaining) : 0;
+            const nextApproval = res && res.next_approval ? res.next_approval : null;
+            if (nextApproval && openNextApprovalFromResponse(rid, nextApproval)) {
+                setComposerLoading(false);
+                return;
+            }
+            if (queueRemaining > 0) {
+                setComposerLoading(false);
+                if (state.currentSession?.id) {
+                    selectSession(Number(state.currentSession.id)).catch(() => {});
+                }
+                return;
+            }
+            const streamUrl = res && res[streamUrlKey] ? String(res[streamUrlKey]) : '';
+            if (streamUrl) {
+                openResumeEventSourceFromUrl(streamUrl, rid);
+            } else if (state.currentSession?.id) {
+                setComposerLoading(false);
+                selectSession(Number(state.currentSession.id)).catch(() => {});
+            } else {
+                setComposerLoading(false);
+            }
+        }
+
         document.getElementById('ai-ops-tool-approval-approve-btn')?.addEventListener('click', () => {
             if (!pendingApprovalCtx) return;
             const ctx = { ...pendingApprovalCtx };
+            const runKey = String(ctx.runId);
+            if (approvalRequestInFlightByRunId[runKey]) {
+                return;
+            }
             const url = aiOpsHttp.approveUrl(ctx.runId, ctx.approvalId);
             if (!url) {
                 alert(text.networkError);
@@ -1649,12 +1944,12 @@ const root = document.getElementById('admin-ai-ops-page');
             const rid = ctx.runId;
             const toolName = ctx.toolName || '';
             hideToolApprovalModal();
+            approvalRequestInFlightByRunId[runKey] = true;
             setComposerLoading(true);
             const live = ensureLiveStruct(rid);
             const toolCallId = resolveApprovalToolCallId(live, rid, ctx.toolCallId, toolName);
             if (toolCallId) {
                 approvalToolCallByRunId[String(rid)] = toolCallId;
-                markSiblingPendingToolsRejected(live, toolCallId, text.toolSiblingCancelledOnApproval);
                 markToolPhaseByCallId(live, toolCallId, 'executing', { successful: false, toolName });
                 syncRunAssistantTimelineFromLiveBuffer(
                     state.currentSession?.runs?.find((r) => Number(r.id) === Number(rid)) || { id: rid },
@@ -1662,49 +1957,23 @@ const root = document.getElementById('admin-ai-ops-page');
                 renderTranscript();
             }
             request(url, { method: 'POST', body: JSON.stringify({}) })
-                .then((res) => {
-                    const liveAfter = ensureLiveStruct(rid);
-                    const resolvedId = resolveApprovalToolCallId(liveAfter, rid, toolCallId, toolName);
-                    if (resolvedId && res && (res.executed_this_request || res.already_executed)) {
-                        const okPreview = res.executed_output_preview != null ? String(res.executed_output_preview) : '';
-                        const successful = res.executed_ok !== false;
-                        recordToolDoneToLive(liveAfter, {
-                            phase: 'done',
-                            tool_call_id: resolvedId,
-                            tool_name: toolName,
-                            successful,
-                            result_preview: okPreview,
-                        });
-                    }
-                    if (res && res.run && state.currentSession?.runs) {
-                        const runs = [...state.currentSession.runs];
-                        const idx = runs.findIndex((r) => Number(r.id) === Number(res.run.id));
-                        if (idx >= 0) {
-                            const merged = { ...res.run };
-                            delete merged.assistant_timeline;
-                            runs[idx] = merged;
-                            syncRunAssistantTimelineFromLiveBuffer(runs[idx]);
-                        }
-                        state.currentSession.runs = runs;
-                        renderTranscript();
-                        updateHeaderFromSession();
-                    }
-                    const streamUrl = res && res.resume_stream_url ? String(res.resume_stream_url) : '';
-                    if (streamUrl) {
-                        openResumeEventSourceFromUrl(streamUrl, rid);
-                    } else if (state.currentSession?.id) {
-                        selectSession(Number(state.currentSession.id)).catch(() => {});
-                    }
-                })
+                .then((res) => finishApprovalHttpResponse(res, rid, toolName, toolCallId, 'resume_stream_url'))
                 .catch((e) => {
                     setComposerLoading(false);
                     alert(e.message);
+                })
+                .finally(() => {
+                    delete approvalRequestInFlightByRunId[runKey];
                 });
         });
 
         document.getElementById('ai-ops-tool-approval-reject-btn')?.addEventListener('click', () => {
             if (!pendingApprovalCtx) return;
             const ctx = { ...pendingApprovalCtx };
+            const runKey = String(ctx.runId);
+            if (approvalRequestInFlightByRunId[runKey]) {
+                return;
+            }
             const url = aiOpsHttp.rejectUrl(ctx.runId, ctx.approvalId);
             if (!url) {
                 alert(text.networkError);
@@ -1714,43 +1983,26 @@ const root = document.getElementById('admin-ai-ops-page');
             const reason = (document.getElementById('ai-ops-tool-approval-reason')?.value || '').trim();
             const toolName = ctx.toolName || '';
             hideToolApprovalModal();
+            approvalRequestInFlightByRunId[runKey] = true;
             setComposerLoading(true);
             const live = ensureLiveStruct(rid);
             const toolCallId = resolveApprovalToolCallId(live, rid, ctx.toolCallId, toolName);
             if (toolCallId) {
                 const rejectMsg = reason || text.toolPhaseRejected;
                 markToolRejectedByCallId(live, toolCallId, rejectMsg);
-                markSiblingPendingToolsRejected(live, toolCallId, rejectMsg);
                 syncRunAssistantTimelineFromLiveBuffer(
                     state.currentSession?.runs?.find((r) => Number(r.id) === Number(rid)) || { id: rid },
                 );
                 renderTranscript();
             }
             request(url, { method: 'POST', body: JSON.stringify({ reason }) })
-                .then((res) => {
-                    if (res && res.run && state.currentSession?.runs) {
-                        const runs = [...state.currentSession.runs];
-                        const idx = runs.findIndex((r) => Number(r.id) === Number(res.run.id));
-                        if (idx >= 0) {
-                            const merged = { ...res.run };
-                            delete merged.assistant_timeline;
-                            runs[idx] = merged;
-                            syncRunAssistantTimelineFromLiveBuffer(runs[idx]);
-                        }
-                        state.currentSession.runs = runs;
-                        renderTranscript();
-                        updateHeaderFromSession();
-                    }
-                    const streamUrl = res && res.reject_resume_stream_url ? String(res.reject_resume_stream_url) : '';
-                    if (streamUrl) {
-                        openResumeEventSourceFromUrl(streamUrl, rid);
-                    } else if (state.currentSession?.id) {
-                        selectSession(Number(state.currentSession.id)).catch(() => {});
-                    }
-                })
+                .then((res) => finishApprovalHttpResponse(res, rid, toolName, toolCallId, 'reject_resume_stream_url'))
                 .catch((e) => {
                     setComposerLoading(false);
                     alert(e.message);
+                })
+                .finally(() => {
+                    delete approvalRequestInFlightByRunId[runKey];
                 });
         });
 

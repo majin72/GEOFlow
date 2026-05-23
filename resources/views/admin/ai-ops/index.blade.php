@@ -182,6 +182,7 @@
         <div class="mt-4 space-y-3 text-sm text-slate-700">
             <div><span class="font-medium text-slate-500">{{ __('admin.ai_ops.tool_called') }}</span> <code id="ai-ops-tool-approval-tool" class="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-900"></code></div>
             <div id="ai-ops-tool-approval-summary" class="leading-relaxed"></div>
+            <div id="ai-ops-tool-approval-queue" class="hidden rounded-lg border border-indigo-100 bg-indigo-50/90 px-3 py-2 text-xs font-medium text-indigo-900"></div>
             <div class="text-xs text-slate-500"><span class="font-medium">{{ __('admin.ai_ops.tool_approval_expires') }}</span> <span id="ai-ops-tool-approval-expires"></span></div>
             <div class="text-xs text-slate-500"><span class="font-medium">{{ __('admin.ai_ops.tool_approval_fingerprint') }}</span> <code id="ai-ops-tool-approval-fp" class="break-all text-[11px] text-slate-700"></code></div>
             <label class="block text-xs font-medium text-slate-600" for="ai-ops-tool-approval-reason">{{ __('admin.ai_ops.tool_reject_reason_placeholder') }}</label>
@@ -243,6 +244,8 @@
             'toolApprove' => __('admin.ai_ops.tool_approve'),
             'toolReject' => __('admin.ai_ops.tool_reject'),
             'toolApprovalOpen' => __('admin.ai_ops.tool_approval_open'),
+            'toolApprovalQueue' => __('admin.ai_ops.tool_approval_queue'),
+            'toolApprovalBusy' => __('admin.ai_ops.tool_approval_busy'),
             'statuses' => [
                 'processing' => __('admin.ai_ops.status_processing'),
                 'queued' => __('admin.ai_ops.status_queued'),
