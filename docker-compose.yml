@@ -1,16 +1,18 @@
 name: geoflow-laravel
 
-# Vite 构建期注入的前端公开变量；任一 build 块使用 `args: *vite_build_args` 即可复用。
-x-vite-build-args: &vite_build_args
+# Vite 与 PHP 镜像构建参数；任一 build 块使用 `args: *app_build_args` 即可复用。
+x-app-build-args: &app_build_args
   VITE_REVERB_APP_KEY: "${REVERB_APP_KEY:-}"
   VITE_REVERB_HOST: "${REVERB_HOST:-}"
   VITE_REVERB_PORT: "${REVERB_PORT:-}"
   VITE_REVERB_SCHEME: "${REVERB_SCHEME:-}"
   VITE_REVERB_PATH: "${REVERB_SERVER_PATH:-}"
+  PHP_CLI_IMAGE: ${PHP_CLI_IMAGE:-php:8.4-cli-bookworm}
+  COMPOSER_PACKAGIST_MIRROR: ${COMPOSER_PACKAGIST_MIRROR:-https://mirrors.aliyun.com/composer/}
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: ${PGVECTOR_IMAGE:-pgvector/pgvector:pg16}
     container_name: geoflow-postgres
     environment:
       POSTGRES_DB: ${DB_DATABASE:-geo_flow}
@@ -28,7 +30,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: ${REDIS_IMAGE:-redis:7-alpine}
     container_name: geoflow-redis
     ports:
       - "127.0.0.1:${REDIS_EXPOSE_PORT:-16379}:6379"
@@ -39,7 +41,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-      args: *vite_build_args
+      args: *app_build_args
     container_name: geoflow-init
     working_dir: /var/www/html
     env_file:
@@ -64,7 +66,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-      args: *vite_build_args
+      args: *app_build_args
     container_name: geoflow-app
     working_dir: /var/www/html
     env_file:
@@ -88,12 +90,12 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-      args: *vite_build_args
+      args: *app_build_args
     container_name: geoflow-queue
     working_dir: /var/www/html
     env_file:
       - ./.env
-    command: ["php", "artisan", "queue:work", "redis", "--queue=geoflow,default", "--sleep=1", "--tries=1", "--timeout=300"]
+    command: ["php", "artisan", "queue:work", "redis", "--queue=geoflow,distribution,default", "--sleep=1", "--tries=1", "--timeout=300"]
     volumes:
       - ./:/var/www/html
     # URL 智能采集 job 在此容器执行；走 host.docker.internal 访问宿主机上的 external-fetch-bridge。
@@ -109,7 +111,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-      args: *vite_build_args
+      args: *app_build_args
     container_name: geoflow-scheduler
     working_dir: /var/www/html
     env_file:
@@ -127,7 +129,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-      args: *vite_build_args
+      args: *app_build_args
     container_name: geoflow-reverb
     working_dir: /var/www/html
     env_file:
@@ -141,4 +143,3 @@ services:
       init:
         condition: service_completed_successfully
     restart: unless-stopped
-

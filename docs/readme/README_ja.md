@@ -2,7 +2,7 @@
 
 > Languages: [简体中文](../../README.md) | [English](README_en.md) | [日本語](README_ja.md) | [Español](README_es.md) | [Русский](README_ru.md) | [Português (BR)](README_pt_BR.md)
 
-> GEOFlow は GEO（Generative Engine Optimization）に特化して設計されたオープンソースのインテリジェント・コンテンツエンジニアリングシステムです。GEO シナリオを中心に体系的に設計された、世界でも最も早いデータ・コンテンツ・配信インフラの一つであり、データ資産、ナレッジベース、素材管理、AI 生成、レビュー、公開、フロント表示、将来的なマルチチャネル配信までを継続的に進化する一つのパイプラインとして結びます。
+> GEOFlow は GEO（Generative Engine Optimization）向けのオープンソース・コンテンツエンジニアリング／マルチサイト配信システムです。ナレッジベース、素材ライブラリ、プロンプト、AI 生成タスク、レビューと公開、データ分析、GEOFlow Agent ターゲットサイトパッケージ、WordPress REST チャネル、リモート静的ページ配信を一つの運用フローに統合し、信頼できる資料を追跡可能で公開・配信しやすい GEO コンテンツ資産へ変換します。
 
 [![PHP](https://img.shields.io/badge/PHP-8.2%2B-blue)](https://www.php.net/)
 [![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL-336791)](https://www.postgresql.org/)
@@ -20,17 +20,19 @@ GEOFlow は [Apache License 2.0](../../LICENSE) の下で公開されていま�
 
 | 機能 | 説明 |
 |------|------|
-| 🤖 マルチモデル生成 | OpenAI 互換 API、chat / embedding、Provider URL 自動適配、スマートフェイルオーバー |
-| 📦 バッチタスク | タスク作成、生成数、公開頻度、キュー、失敗記録、タスク別記事フィルタ |
-| 🗂 素材の一元管理 | タイトル、キーワード、画像、作者、ナレッジ、プロンプト |
-| 🧠 ナレッジ RAG | アップロード文書の分割、embedding 設定時のベクトル保存、生成時の関連文脈検索 |
-| 📋 レビューと公開 | 下書き、レビュー、公開、状態・作者・タスクによる記事フィルタ |
-| 🔍 検索向け表示 | SEO メタ、OG、構造化データ、見出し・表・リスト・画像の GFM Markdown 表示 |
-| 🎨 フロントとテーマ | デフォルトテーマ、テーマパッケージ、プレビュー、管理画面でのテーマ切替 |
-| 🌍 管理画面 i18n | 中国語、英語、日本語、スペイン語、ロシア語、ポルトガル語（ブラジル） |
+| 🤖 マルチモデル生成 | OpenAI 互換 API と Gemini ネイティブ API、chat / embedding、Provider URL 自動適配、スマートフェイルオーバー、リトライ、利用統計 |
+| 🧠 ナレッジ RAG | ルールベース分割、任意の LLM セマンティック計画、安定フォールバック、embedding 設定時のベクトル保存、生成時の関連文脈検索 |
+| 🗂 素材とプロンプト | タイトル、キーワード、画像、作者、ナレッジ、本文プロンプト、特殊プロンプト |
+| 📦 タスク自動化 | 生成数、下書きプール、レビュー設定、公開頻度、キュー、失敗リトライ、公開範囲、タスク別記事フィルタ |
+| 📋 レビューと記事管理 | 下書き、レビュー、公開、ゴミ箱、作者、カテゴリ、SEO、タスク由来を一元管理 |
+| 📡 マルチサイト配信 | GEOFlow Agent と WordPress REST チャネル、シークレット、ターゲットサイトパッケージ、静的モード、rewrite ルール、リモート編集/削除、キュー、ログ |
+| 🧾 ターゲットサイトパッケージ | チャネルごとの PHP Agent、ホーム、記事ページ、静的アセット、sitemap、`llms.txt` / TXT マップ、Schema |
+| 📊 データ分析 | システム概要、単一サイト運用、マルチサイト配信、アクセスログ、Top コンテンツ、AI クローラー識別、トレンド |
+| 🔍 SEO と LLM 向け出力 | SEO メタ、OG、Schema、GFM Markdown、独立 CSS、画像同期、sitemap、TXT マップ |
+| 🎨 フロントとテーマ | テーマ、プレビュー、管理画面でのテーマ切替、リモートサイトのタイトル・著作権・テーマ・カテゴリ同期 |
+| 🌍 管理画面 i18n | 中国語、英語、日本語、スペイン語、ロシア語、ポルトガル語（ブラジル）。GEOFlow 2.0 モジュールも対象 |
 | 🔔 バージョン通知 | GitHub `version.json` を確認し、新バージョンを管理画面で通知 |
-| 🐳 すぐデプロイ | **Docker Compose**：PostgreSQL（pgvector）、Redis、アプリ、キュー、スケジューラ、Reverb |
-| 🗄 PostgreSQL | デフォルト DB。安定運用と同時書き込みに適する |
+| 🐳 すぐデプロイ | **Docker Compose**：PostgreSQL（pgvector）、Redis、アプリ、キュー、スケジューラ、Reverb、本番 Nginx/php-fpm |
 
 ---
 
@@ -51,14 +53,18 @@ GEOFlow は [Apache License 2.0](../../LICENSE) の下で公開されていま�
 
 ## 🆕 新バージョンの主な更新点
 
-新バージョンの主な変更点は次のとおりです。
+GEOFlow 2.0 の主な変更点は次のとおりです。
 
-- 管理画面は GEOFlow ブランド固定、多言語切替、管理者編集・削除、初回歓迎ページ、GitHub 更新通知に対応しています。
-- タスクは固定モデルとスマートフェイルオーバーを選択でき、生成と公開を別ステップとして扱います。
-- 素材はナレッジ、タイトル、キーワード、画像、作者を管理対象に含みます。
-- ナレッジは分割され、embedding モデル設定時にベクトル化して RAG に利用できます。
-- モデル設定は OpenAI 互換 API と `/v1` 以外の Provider パスに対応します。
-- フロントは GFM Markdown を使い、表・見出し・リスト・画像を表示し、古い `/uploads` 画像パスも互換処理します。
+- **管理画面を運用ナビゲーション化**：3 ステップ導線を残し、単一サイト運用、マルチサイト配信、関連 skill リソースに整理。
+- **Gemini と OpenAI 互換 Provider を両方サポート**：モデル設定で OpenAI 互換ルートと Gemini ネイティブ chat / embedding を扱えます。
+- **ナレッジ分割にセマンティック計画を追加**：ルールベース、自動、任意の LLM セマンティック計画を選択できます。LLM は境界だけを計画し、最終 chunk は原文から安定的に再構築されます。
+- **データ分析ページを独立化**：システム概要、コンテンツ運用、タスク/素材の健全性、配信状況、アクセスログ、AI クローラートレンドを `/admin/analytics` に集約。
+- **配信管理が実運用可能に**：GEOFlow Agent と WordPress REST チャネル、シークレット、接続テスト、ターゲットサイトパッケージ、静的/rewrite モード、リモート設定同期、キュー、ログ、リモート編集/削除を提供。
+- **公開範囲を明確化**：本体サイト＋チャネル、チャネルのみ、本体サイトのみを選択可能。本体サイトのみではチャネル選択が無効になります。
+- **ターゲットサイトを静的運用可能に**：配信時にホーム、記事ページ、sitemap、TXT マップ、`llms.txt`、画像、独立 CSS を再生成。
+- **素材と RAG を強化**：ナレッジ分割、ベクトル化状態、タイトル、キーワード、画像、作者、プロンプトをタスク入力層として統合。
+- **デプロイと安全性を改善**：本番 Docker は Nginx + PHP-FPM、既存管理者を seed で上書きせず、Docker/Composer ミラーを設定可能。
+- **現在の管理画面キーを多言語でカバー**：2.0 新モジュールで裸の翻訳 key や英語フォールバックが出にくくなりました。
 
 ---
 
@@ -67,13 +73,17 @@ GEOFlow は [Apache License 2.0](../../LICENSE) の下で公開されていま�
 ```
 管理画面
   ↓
-スケジューラ / キュー（Horizon は任意）
+AI 設定 / 素材 / プロンプト / タスク設定
   ↓
-Worker が AI 生成
+スケジューラ / キュー / Worker が AI 生成
   ↓
 下書き / レビュー / 公開
   ↓
-フロント表示
+ローカルフロント記事と SEO ページ
+  ↓
+配信キュー / ターゲットサイト Agent
+  ↓
+リモート静的ホーム、記事ページ、sitemap、TXT マップ、llms.txt
 ```
 
 ---
@@ -82,21 +92,21 @@ Worker が AI 生成
 
 | 層 | 説明 |
 |----|------|
-| Web / Admin | **Laravel** ルートとコントローラ。**Blade** 管理画面と記事サイト |
-| API | `routes/api.php` など（認証はプロジェクト設定に従う） |
-| Scheduler / Queue / Reverb | **Scheduler**、**`queue:work` / Horizon**、必要に応じ **Reverb** |
-| ドメイン / Jobs | `app/Services`、`app/Jobs`、`app/Http/Controllers` などで業務ルールと GEO パイプライン |
-| 永続化 | **PostgreSQL**（**pgvector** 推奨）+ **Redis**（キュー／キャッシュなど） |
+| Web / Admin | **Laravel** ルートとコントローラ。記事サイト、**Blade** 管理画面、分析、配信、素材、タスク |
+| API / Agent | ローカル API とターゲットサイト PHP Agent。ヘルスチェック、記事受信/更新/削除、リモート設定同期、静的ファイル生成 |
+| Scheduler / Queue / Reverb | **Scheduler**、**`queue:work` / Horizon** による生成・配信処理、必要に応じ **Reverb** |
+| ドメイン / Jobs | `app/Services`、`app/Jobs`、`app/Http/Controllers` などで AI 生成、RAG、公開、配信、ログ分析を処理 |
+| 永続化 | **PostgreSQL**（**pgvector** 推奨）+ **Redis** + ターゲットサイト JSON/静的ファイル |
 
-主な流れ：管理でモデル・プロンプトを設定 → ナレッジ、タイトル、キーワード、画像、作者を準備 → タスク作成とキュー投入 → Worker が生成 → 下書き〜公開 → フロントで SEO 付き記事を表示。
+主な流れ：管理でモデル・プロンプトを設定 → ナレッジ、タイトル、キーワード、画像、作者を準備 → タスク作成とキュー投入 → Worker が生成 → 下書き〜公開 → ローカル SEO ページ出力 → 選択チャネルへ配信 → 分析で生産・配信・アクセス・AI クローラーを確認。
 
 ---
 
 ## ⚡ 管理画面の最短導線
 
-1. **API を設定**：少なくとも 1 つの chat モデルを追加します。RAG を使う場合は embedding モデルも追加します。
+1. **API を設定**：少なくとも 1 つの chat モデルを追加します。RAG を使う場合は embedding モデルを追加し、ナレッジ分割戦略を選びます。
 2. **素材を設定**：ナレッジ、タイトル、キーワード、画像、作者を準備します。まずは実在し検証できる資料を使ってください。
-3. **タスクを作成**：素材、モデル、生成数、公開頻度を選び、最初は下書きまたはレビューから検証します。
+3. **タスクを作成**：素材、モデル、生成数、公開頻度、公開範囲を選び、最初は下書きまたはレビューから検証します。
 
 ---
 
@@ -206,7 +216,7 @@ php artisan serve --host=127.0.0.1 --port=8080
 別ターミナル:
 
 ```bash
-php artisan queue:work redis --queue=geoflow,default --sleep=1 --tries=1 --timeout=300
+php artisan queue:work redis --queue=geoflow,distribution,default --sleep=1 --tries=1 --timeout=300
 php artisan schedule:work
 php artisan reverb:start
 ```
@@ -229,8 +239,10 @@ php artisan reverb:start
 
 | 項目 | 値 |
 |------|-----|
-| ユーザー名 | `admin` |
-| パスワード | `password`（**本番では直ちに変更**） |
+| ユーザー名 | `GEOFLOW_ADMIN_USERNAME`、既定は `admin` |
+| パスワード | ローカル開発では既定 `password`。本番では `GEOFLOW_ADMIN_PASSWORD` を設定してください。未設定でアカウントがまだ存在しない場合、seeder は一回限りのランダムパスワードを init / `db:seed` ログに出力します。 |
+
+Seeder は対象ユーザー名が存在しない場合のみ作成します。再実行しても既存のユーザー名、メール、パスワードは上書きされません。
 
 ### ログイン失敗時のロックと手動解除
 

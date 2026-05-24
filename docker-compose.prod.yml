@@ -2,18 +2,28 @@
 # Linux 宿主机：挂载的 ./storage 须对容器内 PHP-FPM 用户可写（官方 php:fpm 常见为 www-data UID/GID 33）；勿长期 root:root 755，否则上传/日志/会话会失败。
 name: geoflow-laravel-prod
 
-# Vite 构建期注入的前端公开变量；任一 build 块使用 `args: *vite_build_args` 即可复用。
-# 这些值会被 Vite 直接打入 JS 产物，因此即使更换 .env.prod 也需要重新 build 镜像才能生效。
-x-vite-build-args: &vite_build_args
+# Vite 与生产镜像构建参数；build 块使用对应 anchor 复用。
+x-prod-app-build-args: &prod_app_build_args
   VITE_REVERB_APP_KEY: "${REVERB_APP_KEY:-}"
   VITE_REVERB_HOST: "${REVERB_HOST:-}"
   VITE_REVERB_PORT: "${REVERB_PORT:-}"
   VITE_REVERB_SCHEME: "${REVERB_SCHEME:-}"
   VITE_REVERB_PATH: "${REVERB_SERVER_PATH:-}"
+  COMPOSER_IMAGE: ${COMPOSER_IMAGE:-composer:2}
+  PHP_FPM_IMAGE: ${PHP_FPM_IMAGE:-php:8.4-fpm-bookworm}
+  COMPOSER_PACKAGIST_MIRROR: ${COMPOSER_PACKAGIST_MIRROR:-https://mirrors.aliyun.com/composer/}
+
+x-prod-web-build-args: &prod_web_build_args
+  VITE_REVERB_APP_KEY: "${REVERB_APP_KEY:-}"
+  VITE_REVERB_HOST: "${REVERB_HOST:-}"
+  VITE_REVERB_PORT: "${REVERB_PORT:-}"
+  VITE_REVERB_SCHEME: "${REVERB_SCHEME:-}"
+  VITE_REVERB_PATH: "${REVERB_SERVER_PATH:-}"
+  NGINX_IMAGE: ${NGINX_IMAGE:-nginx:1.30.1-alpine}
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: ${PGVECTOR_IMAGE:-pgvector/pgvector:pg16}
     container_name: geoflow-postgres-prod
     environment:
       POSTGRES_DB: "${DB_DATABASE:-geo_flow}"
@@ -29,7 +39,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: ${REDIS_IMAGE:-redis:7-alpine}
     container_name: geoflow-redis-prod
     environment:
       REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
@@ -57,7 +67,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.prod
-      args: *vite_build_args
+      args: *prod_app_build_args
     container_name: geoflow-init-prod
     working_dir: /var/www/html
     env_file:
@@ -82,7 +92,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.prod
-      args: *vite_build_args
+      args: *prod_app_build_args
     container_name: geoflow-app-prod
     working_dir: /var/www/html
     env_file:
@@ -109,7 +119,7 @@ services:
     build:
       context: .
       dockerfile: docker/nginx/Dockerfile.prod
-      args: *vite_build_args
+      args: *prod_web_build_args
     container_name: geoflow-web-prod
     ports:
       - "${WEB_PORT:-18080}:80"
@@ -130,12 +140,12 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.prod
-      args: *vite_build_args
+      args: *prod_app_build_args
     container_name: geoflow-queue-prod
     working_dir: /var/www/html
     env_file:
       - ./.env.prod
-    command: ["php", "artisan", "queue:work", "redis", "--queue=geoflow,default", "--sleep=1", "--tries=1", "--timeout=300"]
+    command: ["php", "artisan", "queue:work", "redis", "--queue=geoflow,distribution,default", "--sleep=1", "--tries=1", "--timeout=300"]
     volumes:
       - ./.env.prod:/var/www/html/.env
       - ./storage:/var/www/html/storage
@@ -155,7 +165,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.prod
-      args: *vite_build_args
+      args: *prod_app_build_args
     container_name: geoflow-scheduler-prod
     working_dir: /var/www/html
     env_file:
@@ -174,7 +184,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.prod
-      args: *vite_build_args
+      args: *prod_app_build_args
     container_name: geoflow-reverb-prod
     working_dir: /var/www/html
     env_file:
