@@ -2,6 +2,8 @@
 
 namespace App\Services\Admin\AiOps;
 
+use Closure;
+
 /**
  * 单次 AI 运维首轮 SSE 周期内的可变上下文（供工具挂起审批时读取已流式输出的片段）。
  */
@@ -13,6 +15,13 @@ final class AdminAiOpsStreamContext
     public string $lastToolCallId = '';
 
     public AdminAiOpsAssistantTimelineRecorder $timeline;
+
+    public ?AdminAiOpsLlmTranscriptRecorder $llmTranscript = null;
+
+    /**
+     * @var (Closure(array<string, mixed>): void)|null
+     */
+    public ?Closure $approvalRequiredEmitter = null;
 
     public function __construct(
         public int $runId,
@@ -51,5 +60,17 @@ final class AdminAiOpsStreamContext
     {
         $this->partialAssistantText = $text;
         $this->timeline->applyDelta($text);
+    }
+
+    /**
+     * 推送当前挂起审批给 SSE 前端；没有绑定发射器时静默跳过。
+     *
+     * @param  array<string, mixed>  $approval
+     */
+    public function emitApprovalRequired(array $approval): void
+    {
+        if ($this->approvalRequiredEmitter instanceof Closure) {
+            ($this->approvalRequiredEmitter)($approval);
+        }
     }
 }

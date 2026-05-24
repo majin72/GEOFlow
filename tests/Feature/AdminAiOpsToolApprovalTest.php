@@ -8,7 +8,6 @@ use App\Models\AdminAiOpsSession;
 use App\Models\AdminAiOpsToolApproval;
 use App\Models\AiModel;
 use App\Models\SiteSetting;
-use App\Services\Admin\AiOps\AdminAiOpsChatService;
 use App\Support\AdminWeb;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -19,7 +18,10 @@ class AdminAiOpsToolApprovalTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_second_approve_is_idempotent_and_does_not_call_execute_twice(): void
+    /**
+     * HTTP 批准只记录 approved 决定，重复批准不会执行工具或写入输出。
+     */
+    public function test_second_approve_is_idempotent_and_does_not_execute_tool(): void
     {
         $this->withoutMiddleware(ValidateCsrfToken::class);
 
@@ -66,23 +68,28 @@ class AdminAiOpsToolApprovalTest extends TestCase
             ->postJson($approveUrl)
             ->assertOk()
             ->assertJsonPath('ok', true)
-            ->assertJsonPath('executed_this_request', true);
+            ->assertJsonPath('waiting_for_tool_result', true)
+            ->assertJsonPath('executed_this_request', false);
 
         $firstOut = (string) AdminAiOpsToolApproval::query()->find($approvalId)?->executed_output;
-        $this->assertNotSame('', $firstOut);
+        $this->assertSame('', $firstOut);
+        $this->assertSame('approved', AdminAiOpsToolApproval::query()->find($approvalId)?->status);
 
         $this->actingAs($admin, 'admin')
             ->postJson($approveUrl)
             ->assertOk()
             ->assertJsonPath('ok', true)
-            ->assertJsonPath('already_executed', true)
+            ->assertJsonPath('already_decided', true)
             ->assertJsonPath('executed_this_request', false);
 
         $secondOut = (string) AdminAiOpsToolApproval::query()->find($approvalId)?->executed_output;
         $this->assertSame($firstOut, $secondOut);
     }
 
-    public function test_approve_executes_site_patch_basics_from_stored_arguments(): void
+    /**
+     * HTTP 批准站点写操作不会直接改库，真实写入只能由原始 tool call 执行。
+     */
+    public function test_approve_site_patch_only_records_decision(): void
     {
         $this->withoutMiddleware(ValidateCsrfToken::class);
 
@@ -140,17 +147,21 @@ class AdminAiOpsToolApprovalTest extends TestCase
             ->postJson($approveUrl)
             ->assertOk()
             ->assertJsonPath('ok', true)
-            ->assertJsonPath('executed_this_request', true);
+            ->assertJsonPath('waiting_for_tool_result', true)
+            ->assertJsonPath('executed_this_request', false);
 
         $this->assertSame(
-            'AfterAiOpsApproval',
+            'BeforeAiOpsPatch',
             SiteSetting::query()->where('setting_key', 'site_name')->value('setting_value')
         );
         $out = (string) AdminAiOpsToolApproval::query()->find($approvalId)?->executed_output;
-        $this->assertStringContainsString('"ok"', $out);
+        $this->assertSame('', $out);
     }
 
-    public function test_approve_site_patch_with_site_title_alias_writes_site_name(): void
+    /**
+     * 别名参数的站点写操作同样不会在 approve HTTP 中执行。
+     */
+    public function test_approve_site_patch_title_alias_only_records_decision(): void
     {
         $this->withoutMiddleware(ValidateCsrfToken::class);
 
@@ -201,15 +212,19 @@ class AdminAiOpsToolApprovalTest extends TestCase
                 'approvalId' => $approvalId,
             ]))
             ->assertOk()
-            ->assertJsonPath('executed_this_request', true);
+            ->assertJsonPath('waiting_for_tool_result', true)
+            ->assertJsonPath('executed_this_request', false);
 
         $this->assertSame(
-            '床车旅行记',
+            'BeforeTitleAlias',
             SiteSetting::query()->where('setting_key', 'site_name')->value('setting_value')
         );
     }
 
-    public function test_approve_returns_executed_ok_and_resume_stream_completes_run(): void
+    /**
+     * approve HTTP 不再签发 resume URL，后续由原 SSE 内的 Laravel AI tool loop 继续。
+     */
+    public function test_approve_returns_waiting_without_resume_stream_url(): void
     {
         $this->withoutMiddleware(ValidateCsrfToken::class);
 
@@ -275,33 +290,23 @@ class AdminAiOpsToolApprovalTest extends TestCase
                 'approvalId' => $approvalId,
             ]))
             ->assertOk()
-            ->assertJsonPath('executed_ok', true)
-            ->assertJsonPath('executed_this_request', true);
+            ->assertJsonPath('waiting_for_tool_result', true)
+            ->assertJsonPath('executed_this_request', false);
 
         $this->assertSame('tc-patch-1', (string) AdminAiOpsToolApproval::query()->find($approvalId)?->tool_call_id);
 
         $resumeUrl = (string) $approve->json('resume_stream_url');
-        $this->assertNotSame('', $resumeUrl);
-
-        $this->partialMock(AdminAiOpsChatService::class, function ($mock): void {
-            $mock->shouldReceive('streamAssistantResumeAfterApproval')
-                ->once()
-                ->andReturn('根据工具结果，站点名称已更新。');
-        });
-
-        $response = $this->actingAs($admin, 'admin')->get($resumeUrl);
-        $response->assertOk();
-        $body = $response->streamedContent();
-        $this->assertStringContainsString('"phase":"done"', $body);
-        $this->assertStringContainsString('tc-patch-1', $body);
-
-        $this->assertDatabaseHas('admin_ai_ops_runs', [
-            'id' => $run->id,
-            'status' => 'completed',
+        $this->assertSame('', $resumeUrl);
+        $this->assertDatabaseHas('admin_ai_ops_tool_approvals', [
+            'id' => $approvalId,
+            'status' => 'approved',
         ]);
     }
 
-    public function test_reject_then_resume_stream_completes_run_with_summary(): void
+    /**
+     * reject HTTP 只记录 rejected 决定并等待原 SSE tool call 返回标准错误。
+     */
+    public function test_reject_returns_waiting_without_resume_stream_url(): void
     {
         $this->withoutMiddleware(ValidateCsrfToken::class);
 
@@ -347,26 +352,20 @@ class AdminAiOpsToolApprovalTest extends TestCase
         $reject = $this->actingAs($admin, 'admin')
             ->postJson($rejectUrl, ['reason' => 'user said no'])
             ->assertOk()
-            ->assertJsonPath('ok', true);
+            ->assertJsonPath('ok', true)
+            ->assertJsonPath('waiting_for_tool_result', true);
 
         $resumeUrl = (string) $reject->json('reject_resume_stream_url');
-        $this->assertNotSame('', $resumeUrl);
-
-        $this->partialMock(AdminAiOpsChatService::class, function ($mock): void {
-            $mock->shouldReceive('streamAssistantResumeAfterReject')
-                ->once()
-                ->andReturn('已尊重拒绝并完成收尾说明。');
-        });
-
-        $response = $this->actingAs($admin, 'admin')
-            ->get($resumeUrl);
-        $response->assertOk();
-        $response->streamedContent();
+        $this->assertSame('', $resumeUrl);
 
         $this->assertDatabaseHas('admin_ai_ops_runs', [
             'id' => $run->id,
-            'status' => 'completed',
-            'result_summary' => "partial\n\n已尊重拒绝并完成收尾说明。",
+            'status' => 'processing',
+        ]);
+        $this->assertDatabaseHas('admin_ai_ops_tool_approvals', [
+            'id' => $approvalId,
+            'status' => 'rejected',
+            'rejection_reason' => 'user said no',
         ]);
     }
 

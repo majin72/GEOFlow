@@ -33,8 +33,9 @@ use App\Support\GeoFlow\ApiKeyCrypto;
 use App\Support\GeoFlow\OpenAiRuntimeProvider;
 use Closure;
 use Laravel\Ai\Contracts\Conversational;
+use Laravel\Ai\Messages\AssistantMessage;
 use Laravel\Ai\Messages\Message;
-use Laravel\Ai\Messages\MessageRole;
+use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Streaming\Events\TextDelta;
 use RuntimeException;
 
@@ -77,10 +78,13 @@ class AdminAiOpsChatService
         private readonly TavilyWebSearchTool $tavilyWebSearchTool,
         private readonly AdminOpsSetDefaultEmbeddingModelTool $setDefaultEmbeddingModelTool,
         private readonly AdminOpsFetchUrlTool $fetchUrlTool,
+        private readonly AdminAiOpsLlmTranscriptCodec $transcriptCodec,
     ) {}
 
     /**
-     * 将当前 run 之前本会话内已结束的轮次转为 Laravel AI SDK 所需的 history 消息列表。
+     * 将当前 run 之前本会话内已有内容的轮次转为 Laravel AI SDK 所需的 history 消息列表。
+     *
+     * 含 completed / failed / awaiting_confirmation：审批挂起轮若被排除，后续追问时模型会误以为无历史。
      *
      * @return array<int, Message>
      */
@@ -89,36 +93,62 @@ class AdminAiOpsChatService
         $rows = AdminAiOpsRun::query()
             ->where('session_id', $sessionId)
             ->where('id', '<', $beforeRunId)
-            ->whereIn('status', ['completed', 'failed'])
+            ->whereIn('status', ['completed', 'failed', 'awaiting_confirmation'])
             ->orderBy('id')
-            ->get(['input_text', 'result_summary', 'error_message', 'status']);
+            ->get(['input_text', 'result_summary', 'error_message', 'status', 'plan_stream_snapshot']);
 
-        /** @var array<int, array{user: string, assistant: string}> $pairs */
-        $pairs = [];
+        /** @var array<int, array<int, Message>> $groups */
+        $groups = [];
         foreach ($rows as $row) {
+            $snapshot = is_array($row->plan_stream_snapshot) ? $row->plan_stream_snapshot : [];
+            $stored = is_array($snapshot['llm_messages'] ?? null) ? $snapshot['llm_messages'] : [];
+            $storedMessages = $stored !== [] ? $this->transcriptCodec->fromArray($stored) : [];
+            if ($storedMessages !== []) {
+                $groups[] = $storedMessages;
+
+                continue;
+            }
+
             $userLine = trim((string) ($row->input_text ?? ''));
             if ($userLine === '') {
                 continue;
             }
-            if ((string) $row->status === 'completed') {
+
+            $status = (string) $row->status;
+            if ($status === 'completed') {
                 $assistantLine = trim((string) ($row->result_summary ?? ''));
+            } elseif ($status === 'awaiting_confirmation') {
+                $assistantLine = trim((string) ($row->result_summary ?? ''));
+                if ($assistantLine === '') {
+                    $assistantLine = trim((string) ($snapshot['partial_assistant_text'] ?? ''));
+                }
+                if ($assistantLine !== '') {
+                    $assistantLine .= "\n\n（该轮有写操作待管理员在后台批准执行，可能尚未全部落库。）";
+                }
             } else {
                 $assistantLine = trim((string) ($row->error_message ?? ''));
                 if ($assistantLine === '') {
                     $assistantLine = '（本轮未成功完成。）';
                 }
             }
-            $pairs[] = ['user' => $userLine, 'assistant' => $assistantLine];
+
+            if ($assistantLine === '') {
+                continue;
+            }
+
+            $groups[] = [
+                new UserMessage($userLine),
+                new AssistantMessage($assistantLine),
+            ];
         }
 
-        while ($this->priorPairsEstimatedChars($pairs) > self::PRIOR_CONVERSATION_CHAR_BUDGET && $pairs !== []) {
-            array_shift($pairs);
+        while ($this->priorGroupsEstimatedChars($groups) > self::PRIOR_CONVERSATION_CHAR_BUDGET && $groups !== []) {
+            array_shift($groups);
         }
 
         $messages = [];
-        foreach ($pairs as $pair) {
-            $messages[] = new Message(MessageRole::User, $pair['user']);
-            $messages[] = new Message(MessageRole::Assistant, $pair['assistant']);
+        foreach ($groups as $group) {
+            array_push($messages, ...$group);
         }
 
         return $messages;
@@ -158,7 +188,7 @@ class AdminAiOpsChatService
     }
 
     /**
-     * 用户批准并已执行工具后：基于历史会话 + 合成 user 块（含 partial 与工具输出）续跑模型流。
+     * Legacy：旧审批 nonce 续流使用的合成上下文；新链路禁止调用，改由 Prism 原生 role=tool 继续。
      *
      * @param  array<int, Message>  $priorConversationMessages
      * @param  Closure(string): void  $onTextAccumulated
@@ -199,7 +229,7 @@ class AdminAiOpsChatService
         );
 
         $mergedPrior = array_merge($priorConversationMessages, [
-            new Message(MessageRole::User, $synthesis),
+            new UserMessage($synthesis),
         ]);
 
         return $this->streamAssistantWithPriorAgent(
@@ -214,7 +244,7 @@ class AdminAiOpsChatService
     }
 
     /**
-     * 用户拒绝工具后：合成等价于 tool_result(is_error=true) 的 user 块并续跑模型流。
+     * Legacy：旧拒绝 nonce 续流使用的合成上下文；新链路禁止调用，改由 Prism 原生 role=tool 继续。
      *
      * @param  array<int, Message>  $priorConversationMessages
      * @param  Closure(string): void  $onTextAccumulated
@@ -247,7 +277,7 @@ class AdminAiOpsChatService
         );
 
         $mergedPrior = array_merge($priorConversationMessages, [
-            new Message(MessageRole::User, $synthesis),
+            new UserMessage($synthesis),
         ]);
 
         return $this->streamAssistantWithPriorAgent(
@@ -330,10 +360,16 @@ class AdminAiOpsChatService
             tools: $tools,
             priorConversationMessages: $priorConversationMessages,
         );
+        $transcript = new AdminAiOpsLlmTranscriptRecorder($this->transcriptCodec);
+        $transcript->start($currentUserMessage);
+        if (app()->bound(AdminAiOpsStreamContext::class)) {
+            app(AdminAiOpsStreamContext::class)->llmTranscript = $transcript;
+        }
         $stream = $agent->stream($currentUserMessage, [], $providerName, $modelId);
 
         $manual = '';
         foreach ($stream as $event) {
+            $transcript->record($event);
             if ($onRawModelStreamEvent instanceof Closure) {
                 $onRawModelStreamEvent($event);
             }
@@ -357,6 +393,7 @@ class AdminAiOpsChatService
                 'events_count' => $stream->events->count(),
             ]);
         }
+        $transcript->finish();
 
         return $final;
     }
@@ -465,13 +502,13 @@ TXT;
     }
 
     /**
-     * @param  array<int, array{user: string, assistant: string}>  $pairs
+     * @param  array<int, array<int, Message>>  $groups
      */
-    private function priorPairsEstimatedChars(array $pairs): int
+    private function priorGroupsEstimatedChars(array $groups): int
     {
         $total = 0;
-        foreach ($pairs as $pair) {
-            $total += mb_strlen($pair['user']) + mb_strlen($pair['assistant']);
+        foreach ($groups as $group) {
+            $total += $this->transcriptCodec->estimatedChars($group);
         }
 
         return $total;

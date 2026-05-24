@@ -12,7 +12,7 @@ use Illuminate\Support\Str;
 use RuntimeException;
 
 /**
- * AI 运维高风险工具挂起审批：落库 pending、批准时执行已存参数、拒绝时仅标记并交由续跑合成 tool_result 语义。
+ * AI 运维高风险工具审批：落库 pending，HTTP 仅记录审批决定；真实执行发生在原始 Laravel AI tool call 内。
  */
 class AdminAiOpsToolApprovalService
 {
@@ -292,6 +292,186 @@ class AdminAiOpsToolApprovalService
         }
 
         return $approval;
+    }
+
+    /**
+     * 记录批准决定，不执行工具；等待中的原始 tool call 会读取 approved 后继续执行。
+     *
+     * @return array{waiting_for_tool_result: bool, queue_remaining: int, already_decided: bool}
+     */
+    public function approveDecision(AdminAiOpsToolApproval $approval, int $adminId, int $runId): array
+    {
+        $this->assertSameRun($approval, $runId);
+
+        $alreadyDecided = false;
+        DB::transaction(function () use ($approval, &$alreadyDecided): void {
+            $locked = AdminAiOpsToolApproval::query()->whereKey($approval->id)->lockForUpdate()->first();
+            if (! $locked instanceof AdminAiOpsToolApproval) {
+                return;
+            }
+
+            if (in_array((string) $locked->status, ['approved', 'executed'], true)) {
+                $alreadyDecided = true;
+
+                return;
+            }
+
+            if ((string) $locked->status !== 'pending') {
+                abort(409, '该审批已不可用（状态：'.$locked->status.'）。');
+            }
+
+            if ($locked->expires_at->isPast()) {
+                $locked->forceFill(['status' => 'expired', 'decided_at' => now()])->save();
+                abort(422, '审批已过期。');
+            }
+
+            $locked->forceFill([
+                'status' => 'approved',
+                'decided_at' => now(),
+            ])->save();
+
+            $this->markRunProcessing((int) $locked->run_id);
+        });
+
+        Log::info('admin_ai_ops_tool_approval_approved', [
+            'approval_id' => $approval->id,
+            'run_id' => $runId,
+            'admin_id' => $adminId,
+            'tool_name' => $approval->tool_name,
+            'already_decided' => $alreadyDecided,
+        ]);
+
+        return [
+            'waiting_for_tool_result' => true,
+            'queue_remaining' => $this->pendingCountForRun($runId),
+            'already_decided' => $alreadyDecided,
+        ];
+    }
+
+    /**
+     * 记录拒绝决定；等待中的原始 tool call 会以标准 tool error JSON 返回模型。
+     *
+     * @return array{waiting_for_tool_result: bool, queue_remaining: int, already_decided: bool}
+     */
+    public function rejectDecision(AdminAiOpsToolApproval $approval, int $adminId, int $runId, ?string $reason): array
+    {
+        $this->assertSameRun($approval, $runId);
+
+        $reason = trim((string) $reason);
+        if ($reason === '') {
+            $reason = 'denied by user approval prompt';
+        }
+
+        $alreadyDecided = false;
+        DB::transaction(function () use ($approval, $reason, &$alreadyDecided): void {
+            $locked = AdminAiOpsToolApproval::query()->whereKey($approval->id)->lockForUpdate()->first();
+            if (! $locked instanceof AdminAiOpsToolApproval) {
+                return;
+            }
+
+            if ((string) $locked->status === 'rejected') {
+                $alreadyDecided = true;
+
+                return;
+            }
+
+            if ((string) $locked->status !== 'pending') {
+                abort(409, '该审批已不可用（状态：'.$locked->status.'）。');
+            }
+
+            if ($locked->expires_at->isPast()) {
+                $locked->forceFill(['status' => 'expired', 'decided_at' => now()])->save();
+                abort(422, '审批已过期。');
+            }
+
+            $locked->forceFill([
+                'status' => 'rejected',
+                'decided_at' => now(),
+                'rejection_reason' => $reason,
+            ])->save();
+
+            $this->markRunProcessing((int) $locked->run_id);
+        });
+
+        $fresh = $approval->fresh() ?? $approval;
+        $this->persistApprovalDecisionOnTimeline($fresh, 'rejected');
+
+        Log::info('admin_ai_ops_tool_approval_rejected', [
+            'approval_id' => $approval->id,
+            'run_id' => $runId,
+            'admin_id' => $adminId,
+            'tool_name' => $approval->tool_name,
+            'fingerprint' => $approval->args_fingerprint,
+            'already_decided' => $alreadyDecided,
+        ]);
+
+        return [
+            'waiting_for_tool_result' => true,
+            'queue_remaining' => $this->pendingCountForRun($runId),
+            'already_decided' => $alreadyDecided,
+        ];
+    }
+
+    /**
+     * 原始 tool call 执行完成后写入真实输出，并持久化工具卡片 done 态。
+     */
+    public function markToolCallExecuted(AdminAiOpsToolApproval $approval, string $output): void
+    {
+        DB::transaction(function () use ($approval, $output): void {
+            $locked = AdminAiOpsToolApproval::query()->whereKey($approval->id)->lockForUpdate()->first();
+            if (! $locked instanceof AdminAiOpsToolApproval) {
+                return;
+            }
+
+            if ((string) $locked->status === 'executed') {
+                return;
+            }
+
+            if (! in_array((string) $locked->status, ['approved', 'pending'], true)) {
+                return;
+            }
+
+            $locked->forceFill([
+                'status' => 'executed',
+                'executed_output' => $output,
+            ])->save();
+
+            $this->markRunProcessing((int) $locked->run_id);
+        });
+
+        $fresh = $approval->fresh() ?? $approval;
+        $this->persistApprovalDecisionOnTimeline($fresh, 'executed');
+
+        Log::info('admin_ai_ops_tool_approval_executed_in_tool_call', [
+            'approval_id' => $approval->id,
+            'run_id' => $approval->run_id,
+            'tool_name' => $approval->tool_name,
+            'fingerprint' => $approval->args_fingerprint,
+        ]);
+    }
+
+    /**
+     * 原始 tool call 等待超时或审批过期时，仅标记审批过期，让模型收到标准 tool error 后继续收束。
+     */
+    public function expireApprovalForToolWait(AdminAiOpsToolApproval $approval): void
+    {
+        DB::transaction(function () use ($approval): void {
+            $locked = AdminAiOpsToolApproval::query()->whereKey($approval->id)->lockForUpdate()->first();
+            if (! $locked instanceof AdminAiOpsToolApproval) {
+                return;
+            }
+
+            if (! in_array((string) $locked->status, ['pending', 'approved'], true)) {
+                return;
+            }
+
+            $locked->forceFill([
+                'status' => 'expired',
+                'decided_at' => $locked->decided_at ?? now(),
+            ])->save();
+
+            $this->markRunProcessing((int) $locked->run_id);
+        });
     }
 
     /**
@@ -665,6 +845,21 @@ class AdminAiOpsToolApprovalService
                 ]);
             }
         });
+    }
+
+    /**
+     * 将 run 从等待确认恢复为 processing，表示原始 tool call 已继续推进。
+     */
+    private function markRunProcessing(int $runId): void
+    {
+        $run = AdminAiOpsRun::query()->whereKey($runId)->lockForUpdate()->first();
+        if (! $run instanceof AdminAiOpsRun || (string) $run->status !== 'awaiting_confirmation') {
+            return;
+        }
+
+        $this->runService->updateRun($run, [
+            'status' => 'processing',
+        ]);
     }
 
     /**

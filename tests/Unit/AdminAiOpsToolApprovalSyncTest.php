@@ -97,7 +97,8 @@ class AdminAiOpsToolApprovalSyncTest extends TestCase
         /** @var AdminAiOpsToolApprovalService $svc */
         $svc = app(AdminAiOpsToolApprovalService::class);
         $approval = AdminAiOpsToolApproval::query()->findOrFail($approvalId);
-        $svc->approveAndPrepareResume($approval, (int) $admin->id, (int) $run->id);
+        $svc->approveDecision($approval, (int) $admin->id, (int) $run->id);
+        $svc->markToolCallExecuted($approval->fresh() ?? $approval, '{"ok":true}');
 
         $fresh = AdminAiOpsRun::query()->findOrFail($run->id);
         $timeline = is_array($fresh->plan_stream_snapshot) ? ($fresh->plan_stream_snapshot['assistant_timeline'] ?? []) : [];

@@ -5,8 +5,7 @@ declare(strict_types=1);
 namespace App\Ai\Tools;
 
 use App\Services\Admin\AdminOps\AdminOpsSiteWriteService;
-use App\Services\Admin\AiOps\AdminAiOpsToolApprovalService;
-use App\Services\Admin\AiOps\AdminAiOpsToolRiskEvaluator;
+use App\Services\Admin\AiOps\AdminAiOpsPendingWriteGuard;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Support\Arr;
 use Laravel\Ai\Contracts\Tool;
@@ -21,8 +20,7 @@ final class AdminOpsSitePatchBasicsTool implements Tool
 {
     public function __construct(
         private readonly AdminOpsSiteWriteService $siteWrite,
-        private readonly AdminAiOpsToolRiskEvaluator $aiOpsRisk,
-        private readonly AdminAiOpsToolApprovalService $aiOpsApprovals,
+        private readonly AdminAiOpsPendingWriteGuard $writeGuard,
     ) {}
 
     /**
@@ -53,25 +51,13 @@ final class AdminOpsSitePatchBasicsTool implements Tool
             return json_encode(['ok' => false, 'error' => 'patch_json 必须解析为 JSON 对象。'], JSON_UNESCAPED_UNICODE) ?: '{}';
         }
 
-        $risk = $this->aiOpsRisk->evaluate('AdminOpsSitePatchBasicsTool', [
-            'patch' => $decoded,
-        ]);
-        if ($risk !== null) {
-            $pending = $this->aiOpsApprovals->createPendingWithoutThrow('AdminOpsSitePatchBasicsTool', [
+        return $this->writeGuard->runJson(
+            'AdminOpsSitePatchBasicsTool',
+            [
                 'patch' => $decoded,
-            ], $risk);
-
-            return json_encode([
-                'ok' => false,
-                'pending_user_approval' => true,
-                'approval_id' => $pending['approval_id'],
-                'message' => (string) __('admin.ai_ops.tool_pending_approval_result_preview'),
-            ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
-        }
-
-        $result = $this->siteWrite->patchBasics($decoded);
-
-        return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
+            ],
+            fn (): array => $this->siteWrite->patchBasics($decoded),
+        );
     }
 
     /**

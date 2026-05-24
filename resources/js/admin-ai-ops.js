@@ -1907,6 +1907,10 @@ const root = document.getElementById('admin-ai-ops-page');
             }
             const queueRemaining = res && typeof res.queue_remaining === 'number' ? Number(res.queue_remaining) : 0;
             const nextApproval = res && res.next_approval ? res.next_approval : null;
+            if (res && res.waiting_for_tool_result) {
+                setComposerLoading(true);
+                return;
+            }
             if (nextApproval && openNextApprovalFromResponse(rid, nextApproval)) {
                 setComposerLoading(false);
                 return;
