@@ -1,9 +1,8 @@
-# 使用 php:8.4-cli-bookworm 执行 Composer，与运行时 PHP 版本一致；不从 Hub 拉“拼写式”的 composer:*-php8.4-bookworm（常不存在，且国内镜像易 403）。
-# Composer 可执行文件单独从官方 composer:2 镜像复制（仅二进制，运行时使用本阶段 PHP 8.4）。
-ARG COMPOSER_IMAGE=composer:2
+# vendor 阶段用 Debian PHP CLI 跑 composer install；composer 二进制从 composer:2 镜像复制，避免 composer:2（Alpine）无 apt-get。
+ARG PHP_CLI_IMAGE=php:8.4-cli-bookworm
 ARG PHP_FPM_IMAGE=php:8.4-fpm-bookworm
 
-FROM ${COMPOSER_IMAGE} AS vendor
+FROM ${PHP_CLI_IMAGE} AS vendor
 
 WORKDIR /app
 
