@@ -29,17 +29,9 @@ RUN apt-get -o Acquire::Retries=3 update \
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-# Composer：阿里云 Packagist
-RUN composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/
-
-ARG COMPOSER_PACKAGIST_MIRROR=https://mirrors.aliyun.com/composer/
 ENV COMPOSER_ALLOW_SUPERUSER=1 \
     COMPOSER_MEMORY_LIMIT=-1 \
     COMPOSER_PROCESS_TIMEOUT=2000
-
-RUN if [ -n "${COMPOSER_PACKAGIST_MIRROR}" ]; then \
-        composer config -g repo.packagist composer "${COMPOSER_PACKAGIST_MIRROR}"; \
-    fi
 
 COPY composer.json composer.lock ./
 RUN composer install \
@@ -61,9 +53,7 @@ RUN composer dump-autoload \
     --no-interaction \
     --classmap-authoritative \
     --no-scripts \
- && BROADCAST_CONNECTION=null php artisan package:discover --ansi
-
- && BROADCAST_CONNECTION=null php artisan package:discover --ansi
+    && BROADCAST_CONNECTION=null php artisan package:discover --ansi
 
 # --- 前端资产构建阶段：编译 Vite 产物到 public/build，供运行时镜像与 nginx 镜像复制 ---
 FROM node:22-bookworm-slim AS assets

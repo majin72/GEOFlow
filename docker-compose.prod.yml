@@ -11,7 +11,6 @@ x-prod-app-build-args: &prod_app_build_args
   VITE_REVERB_PATH: "${REVERB_SERVER_PATH:-}"
   COMPOSER_IMAGE: ${COMPOSER_IMAGE:-composer:2}
   PHP_FPM_IMAGE: ${PHP_FPM_IMAGE:-php:8.4-fpm-bookworm}
-  COMPOSER_PACKAGIST_MIRROR: ${COMPOSER_PACKAGIST_MIRROR:-https://mirrors.aliyun.com/composer/}
 
 x-prod-web-build-args: &prod_web_build_args
   VITE_REVERB_APP_KEY: "${REVERB_APP_KEY:-}"
