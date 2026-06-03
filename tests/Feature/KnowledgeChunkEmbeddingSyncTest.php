@@ -83,6 +83,45 @@ class KnowledgeChunkEmbeddingSyncTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_sync_writes_knowledge_base_evidence_metadata_to_chunks(): void
+    {
+        Http::fake();
+
+        $knowledgeBase = KnowledgeBase::query()->create([
+            'name' => '证据化知识库',
+            'description' => '用于验证来源和治理元数据',
+            'content' => 'GEOFlow 知识库需要保留来源、业务线和审核状态。',
+            'character_count' => 28,
+            'file_type' => 'markdown',
+            'word_count' => 28,
+            'source_name' => 'GEOFlow 官方文档',
+            'source_url' => 'https://example.com/geoflow',
+            'source_type' => 'document',
+            'business_line' => 'GEO 内容工程',
+            'effective_date' => '2026-05-01',
+            'risk_level' => 'low',
+            'review_status' => 'reviewed',
+        ]);
+
+        app(KnowledgeChunkSyncService::class)->sync(
+            (int) $knowledgeBase->id,
+            "# 证据化知识库\n\nGEOFlow 知识库需要保留来源、业务线和审核状态。"
+        );
+
+        $chunk = $knowledgeBase->chunks()->firstOrFail();
+        $metadata = json_decode((string) $chunk->metadata_json, true);
+
+        $this->assertSame((int) $knowledgeBase->id, (int) ($metadata['knowledge_base_id'] ?? 0));
+        $this->assertSame('证据化知识库', (string) ($metadata['knowledge_base_name'] ?? ''));
+        $this->assertSame('GEOFlow 官方文档', (string) ($metadata['source_name'] ?? ''));
+        $this->assertSame('https://example.com/geoflow', (string) ($metadata['source_url'] ?? ''));
+        $this->assertSame('GEO 内容工程', (string) ($metadata['business_line'] ?? ''));
+        $this->assertSame('2026-05-01', (string) ($metadata['effective_date'] ?? ''));
+        $this->assertSame('low', (string) ($metadata['risk_level'] ?? ''));
+        $this->assertSame('reviewed', (string) ($metadata['review_status'] ?? ''));
+        Http::assertNothingSent();
+    }
+
     public function test_structured_rule_chunking_keeps_markdown_sections_separate(): void
     {
         Http::fake();
@@ -609,6 +648,110 @@ class KnowledgeChunkEmbeddingSyncTest extends TestCase
             && ($request['requests'][0]['content']['parts'][0]['text'] ?? '') === 'title: GEOFlow Guide | text: GEOFlow 是面向 GEO 内容工程的系统，支持知识库、关键词库和标题库协同生成内容。'
             && ! isset($request['requests'][0]['taskType'])
             && ! isset($request['taskType']));
+    }
+
+    public function test_sync_splits_embedding_requests_into_configured_batch_size(): void
+    {
+        config(['geoflow.embedding_batch_size' => 3]);
+
+        Http::fake([
+            'https://ai.test/v1/embeddings' => function ($request) {
+                $inputs = $request['input'] ?? [];
+                $this->assertIsArray($inputs);
+                $this->assertLessThanOrEqual(3, count($inputs));
+
+                return Http::response([
+                    'data' => array_map(
+                        static fn (int $index): array => ['embedding' => [0.1 + $index, 0.2, 0.3]],
+                        array_keys($inputs)
+                    ),
+                ]);
+            },
+        ]);
+
+        $model = $this->createEmbeddingModel();
+        $knowledgeBase = KnowledgeBase::query()->create([
+            'name' => '批量向量知识库',
+            'description' => '',
+            'content' => '',
+            'character_count' => 0,
+            'file_type' => 'markdown',
+            'word_count' => 0,
+        ]);
+        $content = collect(range(1, 8))
+            ->map(static fn (int $index): string => "## 第 {$index} 节\n\n第 {$index} 节内容。")
+            ->implode("\n\n");
+
+        app(KnowledgeChunkSyncService::class)->sync((int) $knowledgeBase->id, $content, true);
+
+        $chunks = $knowledgeBase->chunks()->orderBy('chunk_index')->get();
+
+        $this->assertCount(8, $chunks);
+        $chunks->each(function ($chunk) use ($model): void {
+            $this->assertSame((int) $model->id, (int) $chunk->embedding_model_id);
+            $this->assertSame(3, (int) $chunk->embedding_dimensions);
+        });
+
+        Http::assertSentCount(3);
+
+        $model->refresh();
+        $this->assertSame(3, (int) $model->used_today);
+        $this->assertSame(3, (int) $model->total_used);
+    }
+
+    public function test_sync_retries_embedding_batches_as_single_requests_when_provider_rejects_batch_size(): void
+    {
+        config(['geoflow.embedding_batch_size' => 4]);
+
+        Http::fake([
+            'https://ai.test/v1/embeddings' => function ($request) {
+                $inputs = $request['input'] ?? [];
+                $this->assertIsArray($inputs);
+
+                if (count($inputs) > 1) {
+                    return Http::response([
+                        'error' => [
+                            'message' => '<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 1',
+                        ],
+                    ], 400);
+                }
+
+                return Http::response([
+                    'data' => [
+                        ['embedding' => [0.4, 0.5, 0.6]],
+                    ],
+                ]);
+            },
+        ]);
+
+        $model = $this->createEmbeddingModel();
+        $knowledgeBase = KnowledgeBase::query()->create([
+            'name' => '单条降级向量知识库',
+            'description' => '',
+            'content' => '',
+            'character_count' => 0,
+            'file_type' => 'markdown',
+            'word_count' => 0,
+        ]);
+        $content = collect(range(1, 4))
+            ->map(static fn (int $index): string => "## 第 {$index} 节\n\n第 {$index} 节内容。")
+            ->implode("\n\n");
+
+        app(KnowledgeChunkSyncService::class)->sync((int) $knowledgeBase->id, $content, true);
+
+        $chunks = $knowledgeBase->chunks()->orderBy('chunk_index')->get();
+
+        $this->assertCount(4, $chunks);
+        $chunks->each(function ($chunk) use ($model): void {
+            $this->assertSame((int) $model->id, (int) $chunk->embedding_model_id);
+            $this->assertSame([0.4, 0.5, 0.6], json_decode((string) $chunk->embedding_json, true));
+        });
+
+        Http::assertSentCount(5);
+
+        $model->refresh();
+        $this->assertSame(4, (int) $model->used_today);
+        $this->assertSame(4, (int) $model->total_used);
     }
 
     public function test_query_embedding_uses_gemini_search_result_prefix_without_task_type(): void

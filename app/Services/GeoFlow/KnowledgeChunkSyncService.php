@@ -11,6 +11,7 @@ use App\Support\GeoFlow\ApiKeyCrypto;
 use App\Support\GeoFlow\OpenAiRuntimeProvider;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Laravel\Ai\Embeddings;
 use Throwable;
 
@@ -49,6 +50,7 @@ class KnowledgeChunkSyncService
             static fn (array $chunk): string => (string) ($chunk['content'] ?? ''),
             $plannedChunks
         ));
+        $knowledgeMetadata = $this->resolveKnowledgeBaseMetadata($knowledgeBaseId);
         $embeddingMetadata = $this->resolveEmbeddingMetadata();
         $embeddingDocumentTitle = $this->resolveEmbeddingDocumentTitle($knowledgeBaseId);
         $generatedEmbeddings = $this->generateEmbeddingsForChunks($chunks, $embeddingMetadata, $requireRealEmbedding, $embeddingDocumentTitle);
@@ -57,7 +59,7 @@ class KnowledgeChunkSyncService
             throw new \RuntimeException(__('admin.knowledge_bases.error.embedding_sync_failed'));
         }
 
-        DB::transaction(function () use ($knowledgeBaseId, $plannedChunks, $generatedEmbeddings): void {
+        DB::transaction(function () use ($knowledgeBaseId, $plannedChunks, $generatedEmbeddings, $knowledgeMetadata): void {
             KnowledgeChunk::query()->where('knowledge_base_id', $knowledgeBaseId)->delete();
 
             foreach ($plannedChunks as $index => $chunk) {
@@ -77,7 +79,7 @@ class KnowledgeChunkSyncService
                     'chunk_title' => mb_substr((string) ($chunk['title'] ?? ''), 0, 255, 'UTF-8'),
                     'section_path' => mb_substr((string) ($chunk['section_path'] ?? ''), 0, 500, 'UTF-8'),
                     'chunk_strategy' => mb_substr((string) ($chunk['strategy'] ?? 'structured_rule'), 0, 50, 'UTF-8'),
-                    'metadata_json' => json_encode($chunk['metadata'] ?? [], JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION),
+                    'metadata_json' => json_encode($this->mergeChunkMetadata($chunk['metadata'] ?? [], $knowledgeMetadata), JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION),
                     'source_hash' => hash('sha256', (string) ($chunk['section_path'] ?? '').'|'.$chunkContent),
                     'token_count' => $this->estimateTokenCount($chunkContent),
                     'embedding_json' => $embeddingJson ?: '[]',
@@ -90,6 +92,60 @@ class KnowledgeChunkSyncService
         });
 
         return count($chunks);
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function resolveKnowledgeBaseMetadata(int $knowledgeBaseId): array
+    {
+        /** @var KnowledgeBase|null $knowledgeBase */
+        $knowledgeBase = KnowledgeBase::query()
+            ->whereKey($knowledgeBaseId)
+            ->first($this->knowledgeBaseMetadataSelectColumns());
+
+        if (! $knowledgeBase) {
+            return [];
+        }
+
+        return array_filter([
+            'knowledge_base_id' => (int) $knowledgeBase->id,
+            'knowledge_base_name' => (string) $knowledgeBase->name,
+            'knowledge_base_description' => trim((string) ($knowledgeBase->description ?? '')),
+            'file_type' => (string) ($knowledgeBase->file_type ?? 'markdown'),
+            'source_name' => trim((string) ($knowledgeBase->source_name ?? '')),
+            'source_url' => trim((string) ($knowledgeBase->source_url ?? '')),
+            'source_type' => trim((string) ($knowledgeBase->source_type ?? 'document')),
+            'business_line' => trim((string) ($knowledgeBase->business_line ?? '')),
+            'effective_date' => $knowledgeBase->effective_date?->toDateString(),
+            'risk_level' => trim((string) ($knowledgeBase->risk_level ?? 'medium')),
+            'review_status' => trim((string) ($knowledgeBase->review_status ?? 'unreviewed')),
+        ], static fn ($value): bool => $value !== null && $value !== '');
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function knowledgeBaseMetadataSelectColumns(): array
+    {
+        $columns = ['id', 'name', 'description', 'file_type'];
+        foreach (['source_name', 'source_url', 'source_type', 'business_line', 'effective_date', 'risk_level', 'review_status'] as $column) {
+            if (Schema::hasColumn('knowledge_bases', $column)) {
+                $columns[] = $column;
+            }
+        }
+
+        return $columns;
+    }
+
+    /**
+     * @param  array<string,mixed>  $chunkMetadata
+     * @param  array<string,mixed>  $knowledgeMetadata
+     * @return array<string,mixed>
+     */
+    private function mergeChunkMetadata(array $chunkMetadata, array $knowledgeMetadata): array
+    {
+        return array_replace($knowledgeMetadata, $chunkMetadata);
     }
 
     /**
@@ -942,33 +998,43 @@ class KnowledgeChunkSyncService
 
         try {
             $results = [];
-            foreach (array_chunk($chunks, 12, true) as $batch) {
-                $batchKeys = array_keys($batch);
-                $batchInputs = $this->formatEmbeddingDocumentInputs(array_values($batch), $embeddingMetadata, $documentTitle);
-                $response = Embeddings::for($batchInputs)
-                    ->timeout(45)
-                    ->generate($providerName, (string) $embeddingMetadata['model_name']);
+            $pendingChunks = $chunks;
+            $batchSize = $this->embeddingBatchSize();
+            while ($pendingChunks !== []) {
+                $batch = array_slice($pendingChunks, 0, $batchSize, true);
 
-                $embeddings = $response->embeddings;
-                foreach (array_values($batch) as $position => $_chunkContent) {
-                    $rawVector = $this->normalizeEmbeddingVector($embeddings[$position] ?? null);
-                    if ($rawVector === null) {
-                        throw new \RuntimeException('invalid_embedding_vector');
+                try {
+                    foreach ($this->generateEmbeddingBatch(
+                        $batch,
+                        $embeddingMetadata,
+                        $providerName,
+                        $canStoreEmbeddingVector,
+                        $documentTitle
+                    ) as $chunkIndex => $embeddingResult) {
+                        $results[$chunkIndex] = $embeddingResult;
                     }
 
-                    $actualDimensions = count($rawVector);
-                    $results[$batchKeys[$position]] = [
-                        'model_id' => (int) $embeddingMetadata['model_id'],
-                        'dimensions' => $actualDimensions,
-                        'provider' => (string) $embeddingMetadata['provider'],
-                        'vector' => $rawVector,
-                        'vector_literal' => $canStoreEmbeddingVector
-                            ? $this->vectorLiteral($this->padVector($rawVector, $this->embeddingStorageDimensions()))
-                            : null,
-                    ];
-                }
+                    $this->recordEmbeddingUsage((int) $embeddingMetadata['model_id']);
+                    foreach (array_keys($batch) as $chunkIndex) {
+                        unset($pendingChunks[$chunkIndex]);
+                    }
+                } catch (Throwable $batchException) {
+                    $message = OpenAiRuntimeProvider::normalizeApiException($batchException, (string) ($embeddingMetadata['api_url'] ?? ''));
+                    if ($batchSize > 1 && count($batch) > 1 && $this->isEmbeddingBatchSizeError($message)) {
+                        Log::info('geoflow.knowledge_embedding_batch_fallback', [
+                            'embedding_model_id' => (int) ($embeddingMetadata['model_id'] ?? 0),
+                            'model_identifier' => (string) ($embeddingMetadata['model_name'] ?? ''),
+                            'batch_size' => count($batch),
+                            'message' => $message,
+                        ]);
 
-                $this->recordEmbeddingUsage((int) $embeddingMetadata['model_id']);
+                        $batchSize = 1;
+
+                        continue;
+                    }
+
+                    throw $batchException;
+                }
             }
 
             return count($results) === count($chunks) ? $results : [];
@@ -987,6 +1053,60 @@ class KnowledgeChunkSyncService
             // 关键兜底：向量 API 不可用时，不中断知识库同步主流程。
             return [];
         }
+    }
+
+    /**
+     * @param  array<int, string>  $batch
+     * @param  array{model_id:int,model_name:string,provider:string,api_url:string,api_key:string,driver:string}  $embeddingMetadata
+     * @return array<int, array{model_id:int,dimensions:int,provider:string,vector:list<float>,vector_literal:?string}>
+     */
+    private function generateEmbeddingBatch(
+        array $batch,
+        array $embeddingMetadata,
+        string $providerName,
+        bool $canStoreEmbeddingVector,
+        ?string $documentTitle = null
+    ): array {
+        $batchKeys = array_keys($batch);
+        $batchInputs = $this->formatEmbeddingDocumentInputs(array_values($batch), $embeddingMetadata, $documentTitle);
+        $response = Embeddings::for($batchInputs)
+            ->timeout(45)
+            ->generate($providerName, (string) $embeddingMetadata['model_name']);
+
+        $results = [];
+        $embeddings = $response->embeddings;
+        foreach (array_values($batch) as $position => $_chunkContent) {
+            $rawVector = $this->normalizeEmbeddingVector($embeddings[$position] ?? null);
+            if ($rawVector === null) {
+                throw new \RuntimeException('invalid_embedding_vector');
+            }
+
+            $actualDimensions = count($rawVector);
+            $results[$batchKeys[$position]] = [
+                'model_id' => (int) $embeddingMetadata['model_id'],
+                'dimensions' => $actualDimensions,
+                'provider' => (string) $embeddingMetadata['provider'],
+                'vector' => $rawVector,
+                'vector_literal' => $canStoreEmbeddingVector
+                    ? $this->vectorLiteral($this->padVector($rawVector, $this->embeddingStorageDimensions()))
+                    : null,
+            ];
+        }
+
+        return $results;
+    }
+
+    private function isEmbeddingBatchSizeError(string $message): bool
+    {
+        $normalized = strtolower($message);
+
+        return str_contains($normalized, 'batch size')
+            || str_contains($normalized, 'batch_size');
+    }
+
+    private function embeddingBatchSize(): int
+    {
+        return max(1, min(64, (int) config('geoflow.embedding_batch_size', 1)));
     }
 
     private function resolveEmbeddingDocumentTitle(int $knowledgeBaseId): string

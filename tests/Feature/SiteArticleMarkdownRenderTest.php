@@ -68,6 +68,55 @@ MD);
             ->assertDontSee('333.png', false);
     }
 
+    public function test_theme_article_page_renders_array_based_sticky_ad(): void
+    {
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'active_theme'],
+            ['setting_value' => 'tdwh-netease-news-en-20260508']
+        );
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'article_detail_ads'],
+            ['setting_value' => json_encode([
+                [
+                    'id' => 'test_ad',
+                    'badge' => 'Demo',
+                    'title' => 'Demo CTA',
+                    'copy' => 'Array based sticky ad copy',
+                    'button_text' => 'Read more',
+                    'button_url' => '/category/tech',
+                    'enabled' => true,
+                ],
+            ], JSON_UNESCAPED_UNICODE)]
+        );
+        SiteSettingsBag::forget();
+
+        $category = Category::query()->create([
+            'name' => '科技资讯',
+            'slug' => 'tech',
+        ]);
+        $author = Author::query()->create([
+            'name' => 'GEOFlow',
+        ]);
+        $article = Article::query()->create([
+            'title' => 'Sticky Ad 渲染测试',
+            'slug' => 'sticky-ad-render-test',
+            'excerpt' => '',
+            'content' => '## 正文',
+            'category_id' => $category->id,
+            'author_id' => $author->id,
+            'status' => 'published',
+            'review_status' => 'approved',
+            'is_ai_generated' => 1,
+            'published_at' => now(),
+        ]);
+
+        $this->get(route('site.article', $article->slug))
+            ->assertOk()
+            ->assertSee('Demo CTA')
+            ->assertSee('Array based sticky ad copy')
+            ->assertSee('Read more');
+    }
+
     public function test_homepage_uses_explicit_hot_and_featured_articles(): void
     {
         $category = Category::query()->create([
@@ -108,6 +157,52 @@ MD);
             ->assertSee('首页热门文章')
             ->assertSee('精选文章')
             ->assertSee('首页精选文章');
+    }
+
+    public function test_frontend_category_navigation_hides_categories_without_published_articles(): void
+    {
+        $visibleCategory = Category::query()->create([
+            'name' => '可见分类',
+            'slug' => 'visible-category',
+        ]);
+        Category::query()->create([
+            'name' => '空分类',
+            'slug' => 'empty-category',
+        ]);
+        $draftCategory = Category::query()->create([
+            'name' => '草稿分类',
+            'slug' => 'draft-category',
+        ]);
+        $author = Author::query()->create([
+            'name' => 'GEOFlow',
+        ]);
+        Article::query()->create([
+            'title' => '已发布文章',
+            'slug' => 'published-category-article',
+            'excerpt' => '摘要',
+            'content' => '正文',
+            'category_id' => $visibleCategory->id,
+            'author_id' => $author->id,
+            'status' => 'published',
+            'review_status' => 'approved',
+            'published_at' => now(),
+        ]);
+        Article::query()->create([
+            'title' => '草稿文章',
+            'slug' => 'draft-category-article',
+            'excerpt' => '摘要',
+            'content' => '正文',
+            'category_id' => $draftCategory->id,
+            'author_id' => $author->id,
+            'status' => 'draft',
+            'review_status' => 'pending',
+        ]);
+
+        $this->get(route('site.home'))
+            ->assertOk()
+            ->assertSee('可见分类')
+            ->assertDontSee('空分类')
+            ->assertDontSee('草稿分类');
     }
 
     public function test_frontend_theme_loads_external_assets_without_inline_css(): void

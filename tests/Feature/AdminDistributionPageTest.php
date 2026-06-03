@@ -7,11 +7,14 @@ use App\Models\Admin;
 use App\Models\AiModel;
 use App\Models\Article;
 use App\Models\ArticleDistribution;
+use App\Models\ArticleImage;
 use App\Models\Author;
 use App\Models\Category;
 use App\Models\DistributionChannel;
 use App\Models\DistributionChannelSecret;
 use App\Models\DistributionLog;
+use App\Models\Image;
+use App\Models\ImageLibrary;
 use App\Models\Prompt;
 use App\Models\Task;
 use App\Models\TitleLibrary;
@@ -246,6 +249,254 @@ class AdminDistributionPageTest extends TestCase
             ])
             ->assertRedirect()
             ->assertSessionHasErrors('wordpress_application_password');
+    }
+
+    public function test_generic_api_distribution_channel_form_shows_generic_fields(): void
+    {
+        $this->actingAs($this->admin(), 'admin')
+            ->get(route('admin.distribution.create'))
+            ->assertOk()
+            ->assertSee(__('admin.distribution.channel_type.generic_http_api'))
+            ->assertSee(__('admin.distribution.generic.section_title'))
+            ->assertSee('name="generic_auth_type"', false)
+            ->assertSee('name="generic_secret"', false)
+            ->assertSee('name="generic_publish_path"', false)
+            ->assertSee('name="generic_remote_id_path"', false);
+    }
+
+    public function test_admin_can_create_generic_api_distribution_channel(): void
+    {
+        $this->actingAs($this->admin(), 'admin')
+            ->post(route('admin.distribution.store'), [
+                'name' => '通用 API',
+                'domain' => 'api.example.com',
+                'endpoint_url' => 'https://api.example.com',
+                'channel_type' => 'generic_http_api',
+                'generic_auth_type' => 'bearer',
+                'generic_secret' => 'api-token',
+                'generic_success_statuses' => '200,201,202',
+                'generic_health_method' => 'GET',
+                'generic_health_path' => '/health',
+                'generic_publish_method' => 'POST',
+                'generic_publish_path' => '/articles',
+                'generic_update_method' => 'POST',
+                'generic_update_path' => '/articles/{remote_id}',
+                'generic_delete_method' => 'DELETE',
+                'generic_delete_path' => '/articles/{remote_id}',
+                'generic_settings_method' => 'POST',
+                'generic_settings_path' => '/site-settings',
+                'generic_remote_id_path' => 'data.id',
+                'generic_remote_url_path' => 'data.url',
+                'generic_payload_wrapper' => 'none',
+                'status' => 'active',
+            ])
+            ->assertRedirect()
+            ->assertSessionMissing('distribution_secret');
+
+        $channel = DistributionChannel::query()->where('name', '通用 API')->firstOrFail();
+        $this->assertSame('generic_http_api', $channel->channelType());
+        $this->assertSame('data.id', $channel->resolvedGenericHttpConfig()['generic_remote_id_path']);
+        $this->assertSame([200, 201, 202], $channel->resolvedGenericHttpConfig()['generic_success_statuses']);
+
+        $secret = DistributionChannelSecret::query()
+            ->where('distribution_channel_id', (int) $channel->id)
+            ->where('status', 'active')
+            ->firstOrFail();
+        $this->assertStringStartsWith('gapi_', (string) $secret->key_id);
+        $this->assertSame(['generic.http'], $secret->scopes);
+        $this->assertSame('api-token', app(ApiKeyCrypto::class)->decrypt((string) $secret->secret_ciphertext));
+    }
+
+    public function test_admin_can_create_generic_api_distribution_channel_without_auth(): void
+    {
+        $this->actingAs($this->admin(), 'admin')
+            ->post(route('admin.distribution.store'), [
+                'name' => '公开 API',
+                'domain' => 'api.example.com',
+                'endpoint_url' => 'https://api.example.com',
+                'channel_type' => 'generic_http_api',
+                'generic_auth_type' => 'none',
+                'generic_success_statuses' => '200,204',
+                'generic_health_method' => 'GET',
+                'generic_health_path' => '/health',
+                'generic_publish_method' => 'POST',
+                'generic_publish_path' => '/articles',
+                'generic_update_method' => 'POST',
+                'generic_update_path' => '/articles/{slug}',
+                'generic_delete_method' => 'DELETE',
+                'generic_delete_path' => '/articles/{slug}',
+                'status' => 'active',
+            ])
+            ->assertRedirect()
+            ->assertSessionMissing('distribution_secret');
+
+        $channel = DistributionChannel::query()->where('name', '公开 API')->firstOrFail();
+        $this->assertSame('generic_http_api', $channel->channelType());
+        $this->assertSame('none', $channel->resolvedGenericHttpConfig()['generic_auth_type']);
+        $this->assertSame('', $channel->resolvedGenericHttpConfig()['generic_settings_path']);
+        $this->assertFalse(DistributionChannelSecret::query()
+            ->where('distribution_channel_id', (int) $channel->id)
+            ->where('status', 'active')
+            ->exists());
+    }
+
+    public function test_generic_api_distribution_rejects_methods_that_cannot_send_article_payloads(): void
+    {
+        $this->actingAs($this->admin(), 'admin')
+            ->post(route('admin.distribution.store'), [
+                'name' => '错误 API',
+                'domain' => 'api.example.com',
+                'endpoint_url' => 'https://api.example.com',
+                'channel_type' => 'generic_http_api',
+                'generic_auth_type' => 'bearer',
+                'generic_secret' => 'api-token',
+                'generic_success_statuses' => '200,201',
+                'generic_health_method' => 'GET',
+                'generic_health_path' => '/health',
+                'generic_publish_method' => 'GET',
+                'generic_publish_path' => '/articles',
+                'generic_update_method' => 'POST',
+                'generic_update_path' => '/articles/{remote_id}',
+                'generic_delete_method' => 'DELETE',
+                'generic_delete_path' => '/articles/{remote_id}',
+                'status' => 'active',
+            ])
+            ->assertRedirect()
+            ->assertSessionHasErrors('generic_publish_method');
+    }
+
+    public function test_generic_api_distribution_rejects_invalid_header_names(): void
+    {
+        $this->actingAs($this->admin(), 'admin')
+            ->post(route('admin.distribution.store'), [
+                'name' => 'Header API',
+                'domain' => 'api.example.com',
+                'endpoint_url' => 'https://api.example.com',
+                'channel_type' => 'generic_http_api',
+                'generic_auth_type' => 'header_key',
+                'generic_secret' => 'api-token',
+                'generic_header_name' => 'Bad Header',
+                'generic_success_statuses' => '200,201',
+                'generic_health_method' => 'GET',
+                'generic_health_path' => '/health',
+                'generic_publish_method' => 'POST',
+                'generic_publish_path' => '/articles',
+                'generic_update_method' => 'POST',
+                'generic_update_path' => '/articles/{remote_id}',
+                'generic_delete_method' => 'DELETE',
+                'generic_delete_path' => '/articles/{remote_id}',
+                'status' => 'active',
+            ])
+            ->assertRedirect()
+            ->assertSessionHasErrors('generic_header_name');
+    }
+
+    public function test_generic_api_distribution_rejects_blank_required_paths(): void
+    {
+        $this->actingAs($this->admin(), 'admin')
+            ->post(route('admin.distribution.store'), [
+                'name' => '路径错误 API',
+                'domain' => 'api.example.com',
+                'endpoint_url' => 'https://api.example.com',
+                'channel_type' => 'generic_http_api',
+                'generic_auth_type' => 'bearer',
+                'generic_secret' => 'api-token',
+                'generic_success_statuses' => '200,201',
+                'generic_health_method' => 'GET',
+                'generic_health_path' => '',
+                'generic_publish_method' => 'POST',
+                'generic_publish_path' => '/articles',
+                'generic_update_method' => 'POST',
+                'generic_update_path' => '/articles/{remote_id}',
+                'generic_delete_method' => 'DELETE',
+                'generic_delete_path' => '/articles/{remote_id}',
+                'status' => 'active',
+            ])
+            ->assertRedirect()
+            ->assertSessionHasErrors('generic_health_path');
+    }
+
+    public function test_generic_api_distribution_rejects_full_url_paths(): void
+    {
+        $this->actingAs($this->admin(), 'admin')
+            ->post(route('admin.distribution.store'), [
+                'name' => '完整 URL API',
+                'domain' => 'api.example.com',
+                'endpoint_url' => 'https://api.example.com',
+                'channel_type' => 'generic_http_api',
+                'generic_auth_type' => 'bearer',
+                'generic_secret' => 'api-token',
+                'generic_success_statuses' => '200,201',
+                'generic_health_method' => 'GET',
+                'generic_health_path' => '/health',
+                'generic_publish_method' => 'POST',
+                'generic_publish_path' => 'https://api.example.com/articles',
+                'generic_update_method' => 'POST',
+                'generic_update_path' => '/articles/{remote_id}',
+                'generic_delete_method' => 'DELETE',
+                'generic_delete_path' => '/articles/{remote_id}',
+                'status' => 'active',
+            ])
+            ->assertRedirect()
+            ->assertSessionHasErrors('generic_publish_path');
+    }
+
+    public function test_generic_api_distribution_detail_hides_target_site_package_and_shows_generic_guide(): void
+    {
+        $channel = DistributionChannel::query()->create([
+            'name' => '通用 API',
+            'domain' => 'api.example.com',
+            'endpoint_url' => 'https://api.example.com',
+            'channel_type' => 'generic_http_api',
+            'channel_config' => [
+                'generic_auth_type' => 'none',
+                'generic_health_path' => '/channels/{channel_id}/health',
+                'generic_publish_method' => 'POST',
+                'generic_publish_path' => '/articles',
+            ],
+            'status' => 'active',
+        ]);
+
+        $this->actingAs($this->admin(), 'admin')
+            ->get(route('admin.distribution.show', ['channelId' => (int) $channel->id]))
+            ->assertOk()
+            ->assertSee(__('admin.distribution.channel_type.generic_http_api'))
+            ->assertSee(__('admin.distribution.generic.guide_title'))
+            ->assertSee(__('admin.distribution.generic.sample_payload_title'))
+            ->assertSee(__('admin.distribution.generic.response_mapping_title'))
+            ->assertSee('/channels/'.(int) $channel->id.'/health')
+            ->assertDontSee(__('admin.distribution.detail.target_package_files'))
+            ->assertDontSee(__('admin.distribution.wordpress.guide_title'))
+            ->assertDontSee(__('admin.distribution.button.download_package'))
+            ->assertDontSee(__('admin.distribution.rewrite.copy_nginx'))
+            ->assertDontSee(__('admin.distribution.button.rotate_secret'));
+    }
+
+    public function test_generic_api_distribution_edit_shows_generic_settings_without_agent_rewrite_controls(): void
+    {
+        $channel = DistributionChannel::query()->create([
+            'name' => '通用 API',
+            'domain' => 'api.example.com',
+            'endpoint_url' => 'https://api.example.com',
+            'channel_type' => 'generic_http_api',
+            'channel_config' => [
+                'generic_auth_type' => 'bearer',
+                'generic_publish_path' => '/articles',
+            ],
+            'status' => 'active',
+        ]);
+
+        $this->actingAs($this->admin(), 'admin')
+            ->get(route('admin.distribution.edit', ['channelId' => (int) $channel->id]))
+            ->assertOk()
+            ->assertSee(__('admin.distribution.channel_type.generic_http_api'))
+            ->assertSee(__('admin.distribution.generic.section_title'))
+            ->assertSee('name="channel_type" value="generic_http_api"', false)
+            ->assertSee('name="generic_auth_type"', false)
+            ->assertSee('name="generic_publish_path"', false)
+            ->assertDontSee(__('admin.distribution.front_mode.static'))
+            ->assertDontSee(__('admin.distribution.rewrite.title'))
+            ->assertDontSee(__('admin.site_settings.theme.section_title'));
     }
 
     public function test_wordpress_distribution_detail_hides_target_site_package_and_shows_connection_guide(): void
@@ -948,6 +1199,16 @@ class AdminDistributionPageTest extends TestCase
 
         $siteCss = (string) $zip->getFromName('assets/css/site.css');
         $siteJs = (string) $zip->getFromName('assets/js/site.js');
+        $channel->refresh();
+        $expectedAssetVersion = substr(hash('sha256', implode('|', [
+            (string) ($channel->template_key ?? ''),
+            (string) ($channel->updated_at ?? ''),
+            (string) config('geoflow.app_version', ''),
+            hash('sha256', $siteCss),
+            hash('sha256', $siteJs),
+        ])), 0, 12);
+        $this->assertStringContainsString('assets/css/site.css?v='.$expectedAssetVersion, $staticIndex);
+        $this->assertStringContainsString('assets/js/site.js?v='.$expectedAssetVersion, $staticIndex);
         $this->assertStringContainsString('.content img', $siteCss);
         $this->assertStringContainsString('data-copy-target', $siteJs);
         $this->assertStringContainsString('body.target-theme-toutiao', $siteCss);
@@ -1043,6 +1304,51 @@ class AdminDistributionPageTest extends TestCase
         unlink($zipPath);
     }
 
+    public function test_fashion_target_site_package_is_self_contained_without_google_fonts(): void
+    {
+        $channel = DistributionChannel::query()->create([
+            'name' => 'Fashion Insight',
+            'domain' => 'fashion.example.com',
+            'endpoint_url' => 'https://fashion.example.com',
+            'template_key' => 'fashion-insight',
+            'status' => 'active',
+        ]);
+        DistributionChannelSecret::query()->create([
+            'distribution_channel_id' => (int) $channel->id,
+            'key_id' => 'gfk_fashion',
+            'secret_ciphertext' => app(ApiKeyCrypto::class)->encrypt('gfsec_fashion_secret'),
+            'status' => 'active',
+            'scopes' => ['article.publish', 'health.check'],
+        ]);
+
+        $response = $this->actingAs($this->admin(), 'admin')
+            ->post(route('admin.distribution.download-package', ['channelId' => (int) $channel->id]), [
+                'package_password' => 'secret-123',
+            ]);
+
+        $response->assertOk();
+
+        $zipPath = tempnam(sys_get_temp_dir(), 'geoflow-target-site-');
+        $this->assertIsString($zipPath);
+        file_put_contents($zipPath, $response->streamedContent());
+
+        $zip = new ZipArchive;
+        $this->assertTrue($zip->open($zipPath));
+
+        $staticIndex = (string) $zip->getFromName('index.html');
+        $frontController = (string) $zip->getFromName('public/index.php');
+        $siteCss = (string) $zip->getFromName('assets/css/site.css');
+
+        $this->assertStringContainsString('class="target-theme-fashion"', $staticIndex);
+        $this->assertStringContainsString('body.target-theme-fashion', $siteCss);
+        $this->assertStringNotContainsString('fonts.googleapis.com', $frontController);
+        $this->assertStringNotContainsString('fonts.gstatic.com', $frontController);
+        $this->assertStringNotContainsString('fonts.googleapis.com', $staticIndex);
+
+        $zip->close();
+        unlink($zipPath);
+    }
+
     public function test_channel_target_site_package_supports_agent_endpoint_under_subdirectory(): void
     {
         $channel = DistributionChannel::query()->create([
@@ -1097,6 +1403,57 @@ class AdminDistributionPageTest extends TestCase
         $this->assertStringContainsString('function sitePath', $frontController);
         $this->assertStringContainsString('verifySignedRequest($config, $method, $path, $body)', $frontController);
         $this->assertStringContainsString("frontSitePath(\$config, '/article/'.rawurlencode(\$slug))", $frontController);
+
+        $zip->close();
+        unlink($zipPath);
+    }
+
+    public function test_apparel_target_site_package_does_not_render_dead_category_navigation(): void
+    {
+        $channel = DistributionChannel::query()->create([
+            'name' => '服装情报站',
+            'domain' => 'apparel.example.com',
+            'endpoint_url' => 'https://apparel.example.com',
+            'template_key' => 'apparel-sourcing-intelligence',
+            'site_settings' => [
+                'site_name' => 'Apparel Intelligence',
+                'site_description' => 'Global sourcing reports',
+            ],
+            'status' => 'active',
+        ]);
+        DistributionChannelSecret::query()->create([
+            'distribution_channel_id' => (int) $channel->id,
+            'key_id' => 'gfk_apparel',
+            'secret_ciphertext' => app(ApiKeyCrypto::class)->encrypt('gfsec_apparel_secret'),
+            'status' => 'active',
+            'scopes' => ['article.publish', 'health.check'],
+        ]);
+
+        $response = $this->actingAs($this->admin(), 'admin')
+            ->post(route('admin.distribution.download-package', ['channelId' => (int) $channel->id]), [
+                'package_password' => 'secret-123',
+            ]);
+
+        $zipPath = tempnam(sys_get_temp_dir(), 'geoflow-target-site-');
+        $this->assertIsString($zipPath);
+        file_put_contents($zipPath, $response->streamedContent());
+
+        $zip = new ZipArchive;
+        $this->assertTrue($zip->open($zipPath));
+
+        $staticIndex = (string) $zip->getFromName('index.html');
+        $this->assertStringContainsString('assets/css/site.css?v=', $staticIndex);
+        $this->assertStringContainsString('assets/js/site.js?v=', $staticIndex);
+        $this->assertStringContainsString('class="target-theme-apparel"', $staticIndex);
+
+        $siteCss = (string) $zip->getFromName('assets/css/site.css');
+        $this->assertStringContainsString('target-theme-apparel', $siteCss);
+        $this->assertSame(1, substr_count($siteCss, 'body.target-theme-fashion{'));
+
+        $frontController = (string) $zip->getFromName('public/index.php');
+        $this->assertStringContainsString('function frontVersionedAssetPath', $frontController);
+        $this->assertStringNotContainsString("foreach (array_slice(siteCategories(\$config), 0, 7)", $frontController);
+        $this->assertStringNotContainsString("frontSitePath(\$config, '/')\">'.h((string) \$category['name'])", $frontController);
 
         $zip->close();
         unlink($zipPath);
@@ -1784,6 +2141,59 @@ MD,
         $this->assertStringContainsString('src="/storage/uploads/images/2026/05/distribution-demo.png"', (string) $payload['article']['content_html']);
     }
 
+    public function test_distribution_payload_includes_selected_article_hero_image_asset(): void
+    {
+        $fixtures = $this->taskFixtures();
+        $imagePath = storage_path('app/public/uploads/images/2026/05/hero-demo.png');
+        if (! is_dir(dirname($imagePath))) {
+            mkdir(dirname($imagePath), 0755, true);
+        }
+        file_put_contents($imagePath, base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=') ?: '');
+
+        $article = Article::query()->create([
+            'title' => '封面图分发文章',
+            'slug' => 'article-with-hero-image',
+            'excerpt' => '摘要',
+            'content' => '正文',
+            'category_id' => $fixtures['category']->id,
+            'author_id' => $fixtures['author']->id,
+            'status' => 'published',
+            'review_status' => 'approved',
+            'published_at' => now(),
+        ]);
+        $library = ImageLibrary::query()->create([
+            'name' => '封面图库',
+        ]);
+        $image = Image::query()->create([
+            'library_id' => (int) $library->id,
+            'filename' => 'hero-demo.png',
+            'original_name' => 'hero-demo.png',
+            'file_name' => 'hero-demo.png',
+            'file_path' => 'storage/uploads/images/2026/05/hero-demo.png',
+            'file_size' => 67,
+            'mime_type' => 'image/png',
+            'width' => 1,
+            'height' => 1,
+        ]);
+        ArticleImage::query()->create([
+            'article_id' => (int) $article->id,
+            'image_id' => (int) $image->id,
+            'position' => 1,
+        ]);
+
+        try {
+            $payload = app(DistributionPayloadBuilder::class)->build($article);
+        } finally {
+            @unlink($imagePath);
+        }
+
+        $this->assertSame('/storage/uploads/images/2026/05/hero-demo.png', $payload['article']['hero_image_url'] ?? null);
+        $this->assertCount(1, $payload['assets']['images'] ?? []);
+        $this->assertSame('/storage/uploads/images/2026/05/hero-demo.png', $payload['assets']['images'][0]['source_url'] ?? null);
+        $this->assertSame('image/png', $payload['assets']['images'][0]['mime_type'] ?? null);
+        $this->assertNotEmpty($payload['assets']['images'][0]['content_base64'] ?? '');
+    }
+
     public function test_distribution_payload_does_not_embed_oversized_local_image_assets(): void
     {
         $fixtures = $this->taskFixtures();
@@ -2085,7 +2495,7 @@ MD,
             'review_status' => 'approved',
             'published_at' => now(),
         ]);
-        ArticleDistribution::query()->create([
+        $distribution = ArticleDistribution::query()->create([
             'article_id' => (int) $article->id,
             'distribution_channel_id' => (int) $channel->id,
             'action' => 'publish',
@@ -2094,12 +2504,16 @@ MD,
             'attempt_count' => 3,
             'idempotency_key' => 'compact-jobs-table',
         ]);
+        config(['app.url' => 'https://configured.example']);
+        $deletePath = route('admin.distribution.article.delete', ['distributionId' => (int) $distribution->id], false);
 
         $this->actingAs($this->admin(), 'admin')
             ->get(route('admin.distribution.show', ['channelId' => (int) $channel->id]))
             ->assertOk()
             ->assertSee('data-distribution-delete-form', false)
             ->assertSee('data-distribution-delete-status', false)
+            ->assertSee('action="'.$deletePath.'"', false)
+            ->assertDontSee('https://configured.example'.$deletePath, false)
             ->assertSee('whitespace-nowrap', false)
             ->assertSee('break-words', false)
             ->assertSee('break-all', false);
