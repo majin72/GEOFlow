@@ -1,0 +1,34 @@
+{
+  "accounts": [
+    {
+      "id": "doubao_account_01",
+      "platform": "doubao",
+      "label": "豆包账号 01",
+      "profile_dir": "./profiles/doubao_account_01",
+      "proxy": "",
+      "locale": "zh-CN",
+      "timezone_id": "Asia/Shanghai",
+      "enabled": true
+    },
+    {
+      "id": "deepseek_account_01",
+      "platform": "deepseek",
+      "label": "DeepSeek 账号 01",
+      "profile_dir": "./profiles/deepseek_account_01",
+      "proxy": "",
+      "locale": "zh-CN",
+      "timezone_id": "Asia/Shanghai",
+      "enabled": true
+    },
+    {
+      "id": "yuanbao_account_01",
+      "platform": "yuanbao",
+      "label": "元宝账号 01",
+      "profile_dir": "./profiles/yuanbao_account_01",
+      "proxy": "",
+      "locale": "zh-CN",
+      "timezone_id": "Asia/Shanghai",
+      "enabled": true
+    }
+  ]
+}

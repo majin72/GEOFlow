@@ -1,0 +1,8 @@
+# GEO Monitor POC local artifacts
+profiles/
+evidence/
+accounts.json
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

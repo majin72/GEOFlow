@@ -1,0 +1,29 @@
+{
+  "prompts": [
+    {
+      "id": "brand_generic",
+      "text": "GEOFlow 是什么？适合哪些企业场景？请给出可验证的来源链接。",
+      "intent": "brand"
+    },
+    {
+      "id": "category_solution",
+      "text": "企业知识库 + AI 内容生成系统有哪些主流方案？各自优缺点是什么？",
+      "intent": "category"
+    },
+    {
+      "id": "comparison",
+      "text": "做 GEO 内容运营，自建 CMS 和使用 AI 内容平台哪种更合适？",
+      "intent": "comparison"
+    },
+    {
+      "id": "how_to",
+      "text": "如何让品牌内容更容易被 AI 搜索引用？请列出具体做法和参考来源。",
+      "intent": "how_to"
+    },
+    {
+      "id": "product_feature",
+      "text": "支持 RAG 知识库、任务调度、WordPress 分发的内容系统有哪些？",
+      "intent": "product"
+    }
+  ]
+}
