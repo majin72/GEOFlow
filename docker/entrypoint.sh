@@ -52,7 +52,13 @@ if [ "${COMPOSER_NEED_POST_INSTALL}" = "true" ]; then
   composer dump-autoload --optimize --no-interaction
 fi
 
-mkdir -p storage/app/public storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs
+mkdir -p storage/app/public storage/app/geo-monitor/evidence storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs
+if [ -d storage/app/geo-monitor ]; then
+  chmod -R ug+rwX storage/app/geo-monitor 2>/dev/null || true
+  if id www-data >/dev/null 2>&1; then
+    chown -R www-data:www-data storage/app/geo-monitor 2>/dev/null || true
+  fi
+fi
 if [ ! -e public/storage ]; then
   php artisan storage:link --force --no-interaction
 fi

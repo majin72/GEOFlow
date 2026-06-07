@@ -23,10 +23,19 @@ fi
 mkdir -p \
   bootstrap/cache \
   storage/app/public \
+  storage/app/geo-monitor/evidence \
   storage/framework/cache/data \
   storage/framework/sessions \
   storage/framework/views \
   storage/logs
+
+# GEO 监测证据目录：与 sidecar 共用 storage 挂载，www-data 须可读写
+if [ -d storage/app/geo-monitor ]; then
+  chmod -R ug+rwX storage/app/geo-monitor 2>/dev/null || true
+  if id www-data >/dev/null 2>&1; then
+    chown -R www-data:www-data storage/app/geo-monitor 2>/dev/null || true
+  fi
+fi
 
 if [ ! -e public/storage ]; then
   php artisan storage:link --force --no-interaction

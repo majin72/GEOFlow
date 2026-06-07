@@ -34,7 +34,8 @@ Laravel 与 sidecar 通过 Compose 内网 DNS 通信：`http://geo-monitor-sidec
 # 若尚无 accounts.json，从样例复制（Laravel 导出也会覆盖写入）
 cp tools/geo-monitor-poc/accounts.sample.json tools/geo-monitor-poc/accounts.json
 
-mkdir -p tools/geo-monitor-poc/profiles storage/app/geo-monitor/evidence
+mkdir -p tools/geo-monitor-poc/profiles
+# storage/app/geo-monitor/evidence 由 Docker entrypoint 自动创建，无需手动 mkdir
 ```
 
 ## 开发环境

@@ -98,7 +98,7 @@ class AppServiceProvider extends ServiceProvider
     }
 
     /**
-     * GEO 监测启用时确保证据目录存在（storage 挂载点，与 sidecar 共用）。
+     * GEO 监测启用时确保证据目录存在且组可读写（storage 与 sidecar 共用）。
      */
     private function ensureGeoMonitorEvidenceDirectory(): void
     {
@@ -108,10 +108,22 @@ class AppServiceProvider extends ServiceProvider
 
         $evidenceRoot = trim((string) config('geoflow.geo_monitor.evidence_root', ''));
 
-        if ($evidenceRoot === '' || is_dir($evidenceRoot)) {
+        if ($evidenceRoot === '') {
             return;
         }
 
-        @mkdir($evidenceRoot, 0775, true);
+        if (! is_dir($evidenceRoot)) {
+            @mkdir($evidenceRoot, 0775, true);
+        }
+
+        if (is_dir($evidenceRoot)) {
+            @chmod($evidenceRoot, 0775);
+        }
+
+        $geoMonitorDir = dirname($evidenceRoot);
+
+        if (is_dir($geoMonitorDir)) {
+            @chmod($geoMonitorDir, 0775);
+        }
     }
 }
