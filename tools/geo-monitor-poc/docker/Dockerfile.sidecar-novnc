@@ -1,0 +1,29 @@
+# GEO Monitor sidecar + noVNC 参考镜像（Debian bookworm）。
+FROM python:3.12-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    GEO_MONITOR_DISPLAY=:99 \
+    GEO_MONITOR_NOVNC_BIND=127.0.0.1 \
+    GEO_MONITOR_NOVNC_PORT=6080
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb fluxbox x11vnc novnc websockify \
+    chromium chromium-driver \
+    fonts-noto-cjk fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir scrapling \
+    && scrapling install --force || true
+
+COPY . .
+
+RUN chmod +x scripts/novnc/*.sh run.sh
+
+EXPOSE 6080 8765
+
+CMD ["sh", "-c", "./scripts/novnc/start-novnc.sh && python -m geo_monitor_poc serve --host 0.0.0.0 --port 8765"]

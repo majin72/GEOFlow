@@ -110,6 +110,16 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 
 但第一次部署仍建议先观察 `init` 是否完成迁移。
 
+### 可选：GEO 监测 sidecar
+
+若需容器化 Chromium sidecar + noVNC，在 `.env.prod` 中启用 GEO 监测并设置 `GEOFLOW_GEO_MONITOR_SIDECAR_URL=http://geo-monitor-sidecar:8765`，然后：
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml --profile geo-monitor up -d geo-monitor-sidecar
+```
+
+未加 `--profile geo-monitor` 时不会启动 sidecar。详见 [../geo-monitoring-docker.md](../geo-monitoring-docker.md)。
+
 ## 4. 访问方式
 
 - 前台与后台统一从 `web`（Nginx）进入

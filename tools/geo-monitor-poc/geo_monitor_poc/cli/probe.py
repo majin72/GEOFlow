@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from geo_monitor_poc.citations import save_json
-from geo_monitor_poc.models import PlatformId, ProbeResult
+from geo_monitor_poc.models import PlatformId, ProbeResult, ProbeStatus
 from geo_monitor_poc.probe_runner import run_probe
 from geo_monitor_poc.report import save_report
 from geo_monitor_poc.utils import build_run_dir, find_account, load_accounts, load_prompts
@@ -41,6 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="证据与报告输出目录",
     )
     parser.add_argument(
+        "--production",
+        action="store_true",
+        help="生产模式：无头 + 非交互；遇验证码立即失败并告警（推荐定时任务使用）",
+    )
+    parser.add_argument(
         "--headless",
         action="store_true",
         help="无头模式运行",
@@ -48,7 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-interactive",
         action="store_true",
-        help="不在终端暂停等待验证码（无头模式建议开启）",
+        help="不在终端暂停等待验证码（无头/生产必开）",
     )
     parser.add_argument(
         "--delay-seconds",
@@ -101,6 +106,11 @@ def run_probe_batch(args: argparse.Namespace) -> int:
 
     platforms = resolve_platforms(args.platform)
     all_results: list[ProbeResult] = []
+    headless = args.headless or args.production
+    interactive = not headless and not args.no_interactive and not args.production
+
+    if args.production:
+        print("生产模式: headless=是, interactive=否, 验证码将触发告警后退出")
 
     for platform in platforms:
         account = find_account(accounts, platform)
@@ -119,8 +129,8 @@ def run_probe_batch(args: argparse.Namespace) -> int:
                 prompt_id=prompt["id"],
                 prompt_text=prompt["text"],
                 evidence_dir=run_dir,
-                headless=args.headless,
-                interactive=not args.headless and not args.no_interactive,
+                headless=headless,
+                interactive=interactive,
             )
             all_results.append(result)
             save_json(run_dir / f"{prompt['id']}.json", result.to_dict())
@@ -128,6 +138,8 @@ def run_probe_batch(args: argparse.Namespace) -> int:
                 f"    status={result.status.value} login={result.login_status.value} "
                 f"citations={len(result.citations)} duration={result.duration_ms}ms"
             )
+            if result.status == ProbeStatus.CAPTCHA:
+                print("    >>> 需人工: ./run.sh captcha --platform", platform.value, "--account-id", account.id)
 
             if index < len(prompts) - 1 and args.delay_seconds > 0:
                 time.sleep(args.delay_seconds)

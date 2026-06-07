@@ -1,5 +1,7 @@
 name: geoflow-laravel
 
+# GEO 监测 sidecar 可选：docker compose --profile geo-monitor up -d（见 docs/geo-monitoring-docker.md）
+
 # Vite 与 PHP 镜像构建参数；任一 build 块使用 `args: *app_build_args` 即可复用。
 x-app-build-args: &app_build_args
   VITE_REVERB_APP_KEY: "${REVERB_APP_KEY:-}"
@@ -8,6 +10,36 @@ x-app-build-args: &app_build_args
   VITE_REVERB_SCHEME: "${REVERB_SCHEME:-}"
   VITE_REVERB_PATH: "${REVERB_SERVER_PATH:-}"
   PHP_CLI_IMAGE: ${PHP_CLI_IMAGE:-php:8.4-cli-bookworm}
+
+# GEO 监测 sidecar（Chromium + noVNC）。仅在使用 --profile geo-monitor 时启动。
+x-geo-monitor-sidecar: &geo_monitor_sidecar
+  profiles:
+    - geo-monitor
+  image: geoflow/geo-monitor-sidecar:latest
+  build:
+    context: ./tools/geo-monitor-poc
+    dockerfile: docker/Dockerfile.sidecar-novnc
+  environment:
+    DISPLAY: ":99"
+    GEO_MONITOR_DISPLAY: ":99"
+    GEO_MONITOR_NOVNC_BIND: "127.0.0.1"
+    GEO_MONITOR_NOVNC_PORT: "${GEOFLOW_GEO_MONITOR_NOVNC_PORT:-6080}"
+    GEO_MONITOR_PROFILE_ROOT: "/app/profiles"
+    GEO_MONITOR_EVIDENCE_ROOT: "/app/evidence"
+    GEO_MONITOR_ACCOUNTS_FILE: "/app/accounts.json"
+    GEO_MONITOR_SIDECAR_TOKEN: "${GEOFLOW_GEO_MONITOR_SIDECAR_TOKEN:-}"
+    GEO_MONITOR_SIDECAR_HOST: "0.0.0.0"
+  ports:
+    - "127.0.0.1:${GEOFLOW_GEO_MONITOR_NOVNC_PORT:-6080}:6080"
+    - "127.0.0.1:${GEOFLOW_GEO_MONITOR_SIDECAR_PORT:-8765}:8765"
+  volumes:
+    - ./tools/geo-monitor-poc:/app
+    - geo-monitor-novnc-state:/app/.novnc-state
+  shm_size: "1gb"
+  restart: unless-stopped
+  command: >
+    sh -c "./scripts/novnc/start-novnc.sh &&
+           python -m geo_monitor_poc serve --host 0.0.0.0 --port 8765"
 
 services:
   postgres:
@@ -142,3 +174,10 @@ services:
       init:
         condition: service_completed_successfully
     restart: unless-stopped
+
+  geo-monitor-sidecar:
+    <<: *geo_monitor_sidecar
+    container_name: geoflow-geo-monitor-sidecar
+
+volumes:
+  geo-monitor-novnc-state:

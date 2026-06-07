@@ -5,7 +5,9 @@ from pathlib import Path
 from geo_monitor_poc.adapters import create_adapter
 from geo_monitor_poc.browser import fetch_with_action, open_platform_session
 from geo_monitor_poc.config import DEFAULT_PROBE_TIMEOUT_MS
-from geo_monitor_poc.models import AccountConfig, LoginStatus, ProbeResult, ProbeStatus
+from geo_monitor_poc.exceptions import CaptchaRequiredError
+from geo_monitor_poc.models import AccountConfig, LoginStatus, ProbeEvidence, ProbeResult, ProbeStatus
+from geo_monitor_poc.notify import emit_captcha_alert
 from geo_monitor_poc.utils import now_ms
 
 
@@ -44,6 +46,47 @@ def _failed_result(
     )
 
 
+def _captcha_result(
+    account: AccountConfig,
+    *,
+    prompt_id: str,
+    prompt_text: str,
+    started_at_ms: int,
+    evidence: ProbeEvidence,
+    stage: str,
+    selector_version: str,
+    error_message: str = "",
+) -> ProbeResult:
+    """
+    构造验证码阻断结果（生产无头模式用）。
+
+    @param account 账号配置
+    @param prompt_id 问题 ID
+    @param prompt_text 问题文本
+    @param started_at_ms 开始毫秒时间戳
+    @param evidence 已保存证据
+    @param stage 验证码出现阶段
+    @param selector_version selector 版本
+    @param error_message 错误说明
+    @return 验证码结果
+    """
+    return ProbeResult(
+        platform=account.platform,
+        account_id=account.id,
+        prompt_id=prompt_id,
+        prompt_text=prompt_text,
+        status=ProbeStatus.CAPTCHA,
+        login_status=LoginStatus.CAPTCHA,
+        evidence=evidence,
+        error_message=error_message or f"检测到验证码（阶段: {stage}）",
+        duration_ms=now_ms() - started_at_ms,
+        meta={
+            "selector_version": selector_version,
+            "captcha_stage": stage,
+        },
+    )
+
+
 def run_probe(
     account: AccountConfig,
     *,
@@ -69,6 +112,7 @@ def run_probe(
     @return 探测结果
     """
     adapter = create_adapter(account)
+    adapter.interactive = interactive
     state: dict[str, object] = {"result": None}
     started_at_ms = now_ms()
 
@@ -93,6 +137,7 @@ def run_probe(
                     if login_status == LoginStatus.CAPTCHA
                     else ProbeStatus.NEEDS_LOGIN
                 )
+                captcha_stage = "页面加载后" if login_status == LoginStatus.CAPTCHA else ""
                 state["result"] = ProbeResult(
                     platform=account.platform,
                     account_id=account.id,
@@ -101,9 +146,16 @@ def run_probe(
                     status=status,
                     login_status=login_status,
                     evidence=evidence,
-                    error_message="登录态无效，请先执行 login 命令",
+                    error_message=(
+                        "检测到验证码，需人工处理 profile"
+                        if login_status == LoginStatus.CAPTCHA
+                        else "登录态无效，请先执行 login 命令"
+                    ),
                     duration_ms=now_ms() - started_at_ms,
-                    meta={"selector_version": adapter.selectors.selector_version},
+                    meta={
+                        "selector_version": adapter.selectors.selector_version,
+                        **({"captcha_stage": captcha_stage} if captcha_stage else {}),
+                    },
                 )
                 return
 
@@ -114,6 +166,19 @@ def run_probe(
                 adapter.click_send(page)
                 adapter.wait_for_human_intervention(page, interactive=interactive, stage="发送问题后")
                 adapter.wait_for_answer(page)
+            except CaptchaRequiredError as exc:
+                evidence = adapter.save_evidence(page, evidence_dir, f"{prompt_id}_captcha")
+                state["result"] = _captcha_result(
+                    account,
+                    prompt_id=prompt_id,
+                    prompt_text=prompt_text,
+                    started_at_ms=started_at_ms,
+                    evidence=evidence,
+                    stage=exc.stage,
+                    selector_version=adapter.selectors.selector_version,
+                    error_message=str(exc),
+                )
+                return
             except Exception as exc:  # noqa: BLE001
                 error_message = str(exc)
                 adapter.save_evidence(page, evidence_dir, f"{prompt_id}_error")
@@ -125,6 +190,18 @@ def run_probe(
                 evidence_dir=evidence_dir,
                 started_at_ms=started_at_ms,
                 error_message=error_message,
+            )
+        except CaptchaRequiredError as exc:
+            evidence = adapter.save_evidence(page, evidence_dir, f"{prompt_id}_captcha")
+            state["result"] = _captcha_result(
+                account,
+                prompt_id=prompt_id,
+                prompt_text=prompt_text,
+                started_at_ms=started_at_ms,
+                evidence=evidence,
+                stage=exc.stage,
+                selector_version=adapter.selectors.selector_version,
+                error_message=str(exc),
             )
         except Exception as exc:  # noqa: BLE001
             state["result"] = _failed_result(
@@ -161,6 +238,9 @@ def run_probe(
 
     result = state.get("result")
     if isinstance(result, ProbeResult):
+        if result.status == ProbeStatus.CAPTCHA:
+            stage = str(result.meta.get("captcha_stage", ""))
+            emit_captcha_alert(result, stage=stage)
         return result
 
     return _failed_result(

@@ -147,4 +147,44 @@ return [
         ), static fn (string $h): bool => $h !== '')),
     ],
 
+    // GEO 引用度监测（AI 平台采集 sidecar + 归因数据）
+    'geo_monitor' => [
+        'enabled' => filter_var(env('GEOFLOW_GEO_MONITOR_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+        'sidecar_url' => rtrim((string) env('GEOFLOW_GEO_MONITOR_SIDECAR_URL', 'http://127.0.0.1:8765'), '/'),
+        'sidecar_token' => (string) env('GEOFLOW_GEO_MONITOR_SIDECAR_TOKEN', ''),
+        'probe_timeout_seconds' => max(30, (int) env('GEOFLOW_GEO_MONITOR_PROBE_TIMEOUT', 150)),
+        'evidence_disk' => (string) env('GEOFLOW_GEO_MONITOR_EVIDENCE_DISK', 'local'),
+        'evidence_path_prefix' => trim((string) env('GEOFLOW_GEO_MONITOR_EVIDENCE_PREFIX', 'geo-monitor/evidence'), '/'),
+        'evidence_root' => (string) env(
+            'GEOFLOW_GEO_MONITOR_EVIDENCE_ROOT',
+            base_path('tools/geo-monitor-poc/evidence/sidecar'),
+        ),
+        'scoring_weights' => [
+            'brand_mention' => 0.35,
+            'own_citation' => 0.35,
+            'citation_coverage' => 0.15,
+            'platform_coverage' => 0.15,
+        ],
+        'lock_cache_store' => (string) env('GEOFLOW_GEO_MONITOR_LOCK_CACHE_STORE', 'redis'),
+        'account_lock_seconds' => max(60, (int) env('GEOFLOW_GEO_MONITOR_ACCOUNT_LOCK_SECONDS', 300)),
+        // headless_linux：生产无头 Linux + noVNC 维护；headed_desktop：macOS/Windows/有头 Linux 本地维护
+        'runtime' => (string) env('GEOFLOW_GEO_MONITOR_RUNTIME', 'headless_linux'),
+        'resource_health' => [
+            'captcha_cooldown_minutes' => max(5, (int) env('GEOFLOW_GEO_MONITOR_CAPTCHA_COOLDOWN_MINUTES', 120)),
+            'failure_cooldown_minutes' => max(5, (int) env('GEOFLOW_GEO_MONITOR_FAILURE_COOLDOWN_MINUTES', 30)),
+            'failures_before_cooldown' => max(1, (int) env('GEOFLOW_GEO_MONITOR_FAILURES_BEFORE_COOLDOWN', 3)),
+        ],
+        'novnc' => [
+            'enabled' => filter_var(env('GEOFLOW_GEO_MONITOR_NOVNC_ENABLED', true), FILTER_VALIDATE_BOOLEAN),
+            'poc_root' => (string) env(
+                'GEOFLOW_GEO_MONITOR_POC_ROOT',
+                base_path('tools/geo-monitor-poc'),
+            ),
+            'bind_host' => (string) env('GEOFLOW_GEO_MONITOR_NOVNC_BIND', '127.0.0.1'),
+            'port' => max(1024, (int) env('GEOFLOW_GEO_MONITOR_NOVNC_PORT', 6080)),
+            'display' => (string) env('GEOFLOW_GEO_MONITOR_DISPLAY', ':99'),
+            'ssh_tunnel_hint_host' => (string) env('GEOFLOW_GEO_MONITOR_SSH_HOST', ''),
+        ],
+    ],
+
 ];

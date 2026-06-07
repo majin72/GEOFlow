@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from geo_monitor_poc.adapters import create_adapter
+from geo_monitor_poc.long_screenshot import capture_long_screenshot
 from geo_monitor_poc.browser import open_platform_session
 from geo_monitor_poc.config import DEFAULT_PROBE_TIMEOUT_MS
 from geo_monitor_poc.models import PlatformId
@@ -64,7 +65,12 @@ def run_discover(args: argparse.Namespace) -> int:
         html_path = output_dir / "page.html"
         screenshot_path = output_dir / "page.png"
         html_path.write_text(page.content(), encoding="utf-8")
-        page.screenshot(path=str(screenshot_path), full_page=True)
+        capture_long_screenshot(
+            page,
+            screenshot_path,
+            scroll_selectors=adapter.selectors.screenshot_scroll_selectors,
+            answer_selectors=adapter.selectors.answer_container_selectors,
+        )
         login_status = adapter.detect_login_status(page)
         (output_dir / "login_status.txt").write_text(login_status.value, encoding="utf-8")
 

@@ -1,0 +1,41 @@
+# 已合并至仓库根目录 docker-compose.yml / docker-compose.prod.yml（profile: geo-monitor）。
+# 本文件保留作 sidecar 单独调试参考；推荐使用主 compose：
+#
+#   docker compose --profile geo-monitor up -d geo-monitor-sidecar
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml --profile geo-monitor up -d geo-monitor-sidecar
+#
+# SSH 隧道（维护 noVNC）:
+#   ssh -L 6080:127.0.0.1:6080 -L 8765:127.0.0.1:8765 user@server
+
+services:
+  geo-monitor-sidecar:
+    profiles:
+      - geo-monitor
+    image: geoflow/geo-monitor-sidecar:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.sidecar-novnc
+    environment:
+      DISPLAY: ":99"
+      GEO_MONITOR_DISPLAY: ":99"
+      GEO_MONITOR_NOVNC_BIND: "127.0.0.1"
+      GEO_MONITOR_NOVNC_PORT: "6080"
+      GEO_MONITOR_PROFILE_ROOT: "/app/profiles"
+      GEO_MONITOR_EVIDENCE_ROOT: "/app/evidence"
+      GEO_MONITOR_ACCOUNTS_FILE: "/app/accounts.json"
+      GEO_MONITOR_SIDECAR_TOKEN: "${GEOFLOW_GEO_MONITOR_SIDECAR_TOKEN:-}"
+      GEO_MONITOR_SIDECAR_HOST: "0.0.0.0"
+    ports:
+      - "127.0.0.1:6080:6080"
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ..:/app
+      - novnc-state:/app/.novnc-state
+    shm_size: "1gb"
+    restart: unless-stopped
+    command: >
+      sh -c "./scripts/novnc/start-novnc.sh &&
+             python -m geo_monitor_poc serve --host 0.0.0.0 --port 8765"
+
+volumes:
+  novnc-state:

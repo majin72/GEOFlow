@@ -51,6 +51,9 @@ class PlatformSelectors:
     answer_done_markers: list[str]
     guest_mode_allowed: bool = False
     page_ready_selector: str = ""
+    screenshot_scroll_selectors: list[str] = field(default_factory=list)
+    web_search_toggle_selectors: list[str] = field(default_factory=list)
+    onboarding_dismiss_selectors: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

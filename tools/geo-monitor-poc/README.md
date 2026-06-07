@@ -50,57 +50,95 @@ cp accounts.sample.json accounts.json
 
 ## 操作流程（推荐顺序）
 
-### Step 0：人工过验证码（浏览器不会自动关）
+### 验证码：生产（无头）vs 本地调试
+
+POC 通过 DOM 检测验证码（`#captcha_container`、verifycenter `iframe`、「滑动验证」等）。  
+**生产环境必须无头**，无法在 headless 里过滑块，策略是：**快速失败 + 告警 + 人工维护 profile**。
+
+#### 生产（推荐）
 
 ```bash
-./run.sh captcha --platform doubao --account-id doubao_guest
+export GEO_MONITOR_WEBHOOK_URL="https://your-hook.example/alert"   # 可选
+export GEO_MONITOR_ALERT_FILE="./evidence/alerts.jsonl"              # 可选
+
+./run.sh probe --production --platform doubao \
+  --accounts accounts.json --prompts prompts.sample.json
 ```
 
-流程：
-
-1. 弹出可见浏览器
-2. 在页面里完成验证码（可顺便登录）
-3. **回到终端按 Enter** 才会关闭并保存 profile
-
-过验证码后再跑 ask：
+- `--production` = `--headless` + 非交互
+- 检测到验证码 → `status=captcha_required`，保存截图/HTML，stderr 打印 **`【生产告警】`**
+- 可配置 Webhook / 告警文件，供 Laravel 队列或监控消费
+- **人工恢复**（同一台机器、同一 `profiles/` 卷）：
 
 ```bash
-./run.sh ask --platform doubao -q "你的问题" --account-id doubao_guest
+./run.sh captcha --platform doubao --account-id doubao_account_01
+# 或 noVNC 里跑 login/captcha，完成后 profile 持久化，再无头重试 probe
 ```
 
-### Step 1：豆包访客模式快速测试（无需登录）
+#### 本地调试（可见浏览器）
 
-出现验证码时，**不要加 `--headless`**，终端会提示你在浏览器里完成验证后按 Enter：
+不加 `--production` / `--headless` 时，验证码会暂停并提示你在浏览器里处理，终端按 Enter 继续。
 
-```bash
-./run.sh ask --platform doubao -q "企业知识库系统有哪些主流方案？请说明优缺点" --account-id doubao_guest
-```
+检测时机：**页面加载后**、**输入前**、**发送后**、**等待回答中**（约每 1.5s）。
 
-说明：
+### Step 0：豆包 / DeepSeek / 元宝 — 先登录（推荐）
 
-- 默认打开**可见浏览器**，方便观察输入和回答过程
-- 不需要先跑 `login`
-- 会自动使用 `profiles/doubao_guest/` 作为浏览器 profile
-
-调试 selector 时可先保存 DOM：
+豆包**访客约 5 轮对话后**会弹出「登录以解锁更多功能」，POC 默认按**登录账号**采集，与 DeepSeek、元宝一致。
 
 ```bash
-./run.sh discover --platform doubao
-```
-
-### Step 2：需要登录的平台（DeepSeek / 元宝）
-
-```bash
+./run.sh login --platform doubao --accounts accounts.json --account-id doubao_account_01
 ./run.sh login --platform deepseek --accounts accounts.json
 ./run.sh login --platform yuanbao --accounts accounts.json
 ```
 
-### Step 3：单题测试（任意平台）
+在弹出浏览器里完成抖音/手机号登录，回到终端按 Enter 保存 `profiles/doubao_account_01/`。
+
+若出现验证码，可先：
 
 ```bash
-./run.sh ask --platform doubao -q "你的问题"
-./run.sh ask --platform deepseek -q "你的问题" --require-login
+./run.sh captcha --platform doubao --account-id doubao_account_01
 ```
+
+### Step 1：豆包单题测试（登录态 + 快速模式）
+
+```bash
+./run.sh ask --platform doubao \
+  -q "企业知识库系统有哪些主流方案？请说明优缺点" \
+  --accounts accounts.json \
+  --account-id doubao_account_01 \
+  --require-login
+```
+
+说明：
+
+- `--require-login`：未登录或触发 5 轮访客上限时会报 `needs_login`，不会空跑
+- 提问前会确保输入栏为 **「快速」** 模式（不用思考模式）
+- 本地调试出现验证码：不要加 `--headless`，按终端提示在浏览器处理
+- 生产定时任务：使用 `--production`，验证码走告警 + `captcha` 维护 profile
+
+**访客仅适合临时试跑**（`doubao_guest`，约 5 次内）：
+
+```bash
+./run.sh ask --platform doubao -q "你好" --account-id doubao_guest
+```
+
+调试 selector：
+
+```bash
+./run.sh discover --platform doubao --accounts accounts.json
+```
+
+### Step 2：单题测试（任意平台）
+
+```bash
+./run.sh ask --platform doubao -q "你的问题" \
+  --accounts accounts.json --account-id doubao_account_01 --require-login
+./run.sh ask --platform deepseek -q "你的问题" --require-login
+./run.sh ask --platform yuanbao -q "你的问题" \
+  --accounts accounts.json --account-id yuanbao_account_01 --require-login
+```
+
+元宝会在提问前自动：关闭「智能联网」新手引导（点「我知道了」）、尝试打开「联网搜索」或「深度思考」、并等待 AI 回答结束（避免 8 秒被侧栏文案误判为已完成）。
 
 ### Step 4：保存 DOM 快照（调 selector）
 
@@ -148,6 +186,8 @@ python -m geo_monitor_poc probe \
 - `evidence/runs/latest-results.json`
 - 每题独立 JSON + 截图/HTML/文本证据
 
+证据 PNG 默认对**聊天滚动区域做长截图**（滚动容器内分段截取后纵向拼接），不再只截一屏视口。若平台 DOM 改版导致截不全，请用 `discover` 更新 `config.py` 里的 `screenshot_scroll_selectors`。
+
 ## Linux 无图形界面：如何过验证码
 
 Linux 服务器**无法直接弹出本地浏览器窗口**，验证码必须在一台「有界面或远程桌面」的环境里完成一次，然后把 **profile 目录** 带到服务器上复用。
@@ -189,7 +229,14 @@ Xvfb :99 + Chromium + noVNC(6080)
 
 profile 持久化在挂载卷 `profiles/doubao_guest/`，之后同一台机器可 `--headless`。
 
-POC 阶段可先不做 Docker 化；Stage 2 sidecar 再封装 noVNC 镜像。
+**双运行环境**（`GEOFLOW_GEO_MONITOR_RUNTIME`）：
+
+| 模式 | 维护方式 |
+|------|----------|
+| `headless_linux` | `scripts/novnc/*` + noVNC，见 `docs/geo-monitoring-novnc.md` |
+| `headed_desktop` | `scripts/headed/maintain-profile.sh`，本机弹出浏览器 |
+
+详见 `docs/geo-monitoring-dual-runtime.md`。
 
 ### 方案 C：验证码复现时的处理
 
@@ -203,32 +250,27 @@ POC 阶段可先不做 Docker 化；Stage 2 sidecar 再封装 noVNC 镜像。
 
 ---
 
-## 无头模式（headless）
+## 无头模式（headless / production）
 
-**前提**：同一 `profile` 已在有界面模式下通过 `captcha` 或成功 `ask` 至少一次。
+**前提**：同一 `profile` 已在有界面环境下通过 `login` / `captcha` 或成功 `ask` 至少一次。
 
-```bash
-./run.sh ask --platform doubao \
-  -q "用三句话总结 SaaS 知识库的优缺点" \
-  --account-id doubao_guest \
-  --headless \
-  --no-interactive
-```
-
-说明：
-
-- `--headless`：不弹浏览器窗口
-- `--no-interactive`：不在终端等验证码（无头无法人工操作）
-- 若 profile 失效出现验证码，无头会失败，需重新跑 `captcha`
-
-批量探测：
+生产批量探测（推荐一条命令）：
 
 ```bash
-./run.sh probe --platform doubao --accounts accounts.json \
-  --limit 1 --headless --delay-seconds 15
+./run.sh probe --production --platform doubao \
+  --accounts accounts.json --prompts prompts.sample.json --limit 1
 ```
 
-（`probe` 同样支持 `--headless --no-interactive`。）
+等价于 `--headless --no-interactive`。出现验证码时返回 `captcha_required` 并触发告警，不会卡在 `input()`。
+
+单次 ask 生产试跑：
+
+```bash
+./run.sh ask --production --platform doubao -q "测试" \
+  --account-id doubao_account_01 --require-login
+```
+
+若 profile 失效出现验证码：看 stderr 告警与证据截图 → 在同一 profile 卷上跑 `captcha` → 再无头重试。
 
 ---
 
@@ -300,12 +342,29 @@ python -m geo_monitor_poc login --platform <platform> --accounts accounts.json
 
 使用 noVNC，或本地登录后上传 profile。
 
+## Sidecar HTTP API（Stage 2）
+
+协议文档：[`docs/SIDECAR_API.md`](docs/SIDECAR_API.md)
+
+```bash
+export GEO_MONITOR_SIDECAR_TOKEN="your-secret"
+./run.sh serve --host 127.0.0.1 --port 8765
+
+# 健康检查
+curl -s http://127.0.0.1:8765/health | jq .
+
+# 单次探测
+curl -s -X POST http://127.0.0.1:8765/v1/probe \
+  -H "Authorization: Bearer $GEO_MONITOR_SIDECAR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"platform":"doubao","account_id":"doubao_account_01","prompt_id":"api_1","prompt_text":"你好","production":true}'
+```
+
 ## 下一步
 
-POC 通过后进入 Stage 2：
+POC 通过后进入 Stage 2/3：
 
-- 封装 Scrapling HTTP sidecar
-- Laravel `ScraplingBridgeClient`
+- Laravel `ScraplingBridgeClient`（对接 `docs/SIDECAR_API.md`）
 - 账号/profile/代理资源池表
 - 后台 `geo-monitoring` 页面
 

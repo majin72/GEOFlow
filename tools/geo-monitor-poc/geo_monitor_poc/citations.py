@@ -21,6 +21,32 @@ def normalize_url(url: str) -> str:
     return cleaned
 
 
+CITATION_EXCLUDED_HOST_FRAGMENTS = (
+    "doubao.com",
+    "doubal.com",
+    "byteimg.com",
+    "byteacctimg.com",
+    "ibytedapm.com",
+    "bytedance.com",
+    "byteacct.com",
+    "snssdk.com",
+)
+
+
+def is_citation_source_url(url: str) -> bool:
+    """
+    判断 URL 是否像外部引用来源（排除豆包 CDN、统计与站内资源）。
+
+    @param url 待检测 URL
+    @return 是否可作为 GEO 引用来源
+    """
+    if not is_http_url(url):
+        return False
+
+    host = urlparse(normalize_url(url)).netloc.lower()
+    return not any(fragment in host for fragment in CITATION_EXCLUDED_HOST_FRAGMENTS)
+
+
 def is_http_url(value: str) -> bool:
     """
     判断字符串是否为 http(s) URL。
@@ -82,7 +108,7 @@ def extract_citations_from_links(
 
     for index, link in enumerate(links, start=1):
         url = normalize_url(link.get("url", ""))
-        if not is_http_url(url):
+        if not is_citation_source_url(url):
             continue
 
         citations.append(

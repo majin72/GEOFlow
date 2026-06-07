@@ -10,6 +10,15 @@ use App\Services\GeoFlow\ArticleSearch\ArticleSearchConfig;
 use App\Services\GeoFlow\ArticleSearch\TavilyArticleSearchService;
 use App\Services\GeoFlow\ExternalFetch\ExternalFetchConfig;
 use App\Services\GeoFlow\ExternalFetch\ExternalFetchService;
+use App\Services\GeoFlow\GeoMonitoring\GeoMonitorConfig;
+use App\Services\GeoFlow\GeoMonitoring\GeoMonitorMaintenanceService;
+use App\Services\GeoFlow\GeoMonitoring\GeoMonitorProbePersister;
+use App\Services\GeoFlow\GeoMonitoring\GeoMonitorResourceHealthService;
+use App\Services\GeoFlow\GeoMonitoring\GeoMonitorResourceScheduler;
+use App\Services\GeoFlow\GeoMonitoring\GeoMonitorRunService;
+use App\Services\GeoFlow\GeoMonitoring\GeoMonitorRuntimeConfig;
+use App\Services\GeoFlow\GeoMonitoring\GeoMonitorSidecarAccountsExporter;
+use App\Services\GeoFlow\GeoMonitoring\ScraplingBridgeClient;
 use App\Services\GeoFlow\HorizonMetricsAdapter;
 use App\Services\GeoFlow\JobQueueService;
 use App\Services\GeoFlow\TaskLifecycleService;
@@ -47,6 +56,20 @@ class AppServiceProvider extends ServiceProvider
                 $app->make(CacheRepository::class),
             );
         });
+        $this->app->singleton(GeoMonitorConfig::class, fn (): GeoMonitorConfig => GeoMonitorConfig::fromConfig());
+        $this->app->singleton(ScraplingBridgeClient::class, function ($app): ScraplingBridgeClient {
+            return new ScraplingBridgeClient(
+                $app->make(GeoMonitorConfig::class),
+                $app->make(HttpFactory::class),
+            );
+        });
+        $this->app->singleton(GeoMonitorProbePersister::class);
+        $this->app->singleton(GeoMonitorRuntimeConfig::class, fn (): GeoMonitorRuntimeConfig => GeoMonitorRuntimeConfig::fromConfig());
+        $this->app->singleton(GeoMonitorResourceScheduler::class, fn (): GeoMonitorResourceScheduler => GeoMonitorResourceScheduler::fromConfig());
+        $this->app->singleton(GeoMonitorResourceHealthService::class, fn (): GeoMonitorResourceHealthService => GeoMonitorResourceHealthService::fromConfig());
+        $this->app->singleton(GeoMonitorMaintenanceService::class, fn (): GeoMonitorMaintenanceService => GeoMonitorMaintenanceService::fromConfig());
+        $this->app->singleton(GeoMonitorSidecarAccountsExporter::class);
+        $this->app->singleton(GeoMonitorRunService::class);
     }
 
     /**

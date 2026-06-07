@@ -11,6 +11,7 @@ from geo_monitor_poc.citations import (
     merge_citations,
 )
 from geo_monitor_poc.config import DEFAULT_ANSWER_WAIT_MS, DEFAULT_POST_ANSWER_WAIT_MS, PLATFORM_SELECTORS
+from geo_monitor_poc.exceptions import CaptchaRequiredError
 from geo_monitor_poc.models import (
     AccountConfig,
     CitationRecord,
@@ -20,6 +21,7 @@ from geo_monitor_poc.models import (
     ProbeResult,
     ProbeStatus,
 )
+from geo_monitor_poc.long_screenshot import capture_long_screenshot
 from geo_monitor_poc.utils import now_ms
 
 
@@ -31,6 +33,7 @@ class PlatformAdapter(ABC):
     def __init__(self, account: AccountConfig) -> None:
         self.account = account
         self.selectors = PLATFORM_SELECTORS[self.platform]
+        self.interactive = False
 
     @abstractmethod
     def build_probe_action(self, prompt_text: str) -> Any:
@@ -112,21 +115,31 @@ class PlatformAdapter(ABC):
         stage: str,
     ) -> None:
         """
-        若出现验证码，在交互模式下等待人工处理。
+        若出现验证码：交互模式暂停等人处理；无头/生产模式抛出 CaptchaRequiredError。
 
         @param page Playwright Page
         @param interactive 是否允许终端暂停等待人工操作
         @param stage 当前阶段描述
+        @raises CaptchaRequiredError 非交互模式下检测到验证码
         """
         if not self.has_captcha(page):
             return
 
         if not interactive:
-            raise RuntimeError(f"{self.platform.value} 在{stage}检测到验证码，请去掉 --headless 后重试")
+            raise CaptchaRequiredError(
+                platform=self.platform,
+                account_id=self.account.id,
+                stage=stage,
+            )
 
         print("")
-        print(f"[{self.platform.value}] 在{stage}检测到验证码。")
-        print("请在浏览器中完成验证，完成后回到终端按 Enter 继续...")
+        print("!" * 60)
+        print(f"【需要人工处理】{self.platform.value} 出现验证码（阶段: {stage}）")
+        print("请在已打开的浏览器窗口中完成滑动/点选验证。")
+        print("完成后回到本终端，按 Enter 继续采集。")
+        print("!" * 60)
+        print("")
+
         while self.has_captcha(page):
             input("验证码完成后按 Enter 继续 >>> ")
             page.wait_for_timeout(1_500)
@@ -232,12 +245,22 @@ class PlatformAdapter(ABC):
         last_text = ""
 
         while time.time() < deadline:
+            self.wait_for_human_intervention(
+                page,
+                interactive=self.interactive,
+                stage="等待回答中",
+            )
+
             current_text = self.extract_answer_text(page)
-            if current_text.strip() != "" and current_text == last_text:
-                for marker in self.selectors.answer_done_markers:
-                    if page.locator(marker).count() > 0:
-                        return
-                return
+            cleaned = current_text.strip()
+            if cleaned != "" and cleaned == last_text.strip():
+                has_done_marker = any(
+                    page.locator(marker).count() > 0 for marker in self.selectors.answer_done_markers
+                )
+                if has_done_marker and len(cleaned) >= 40:
+                    return
+                if len(cleaned) >= 120:
+                    return
 
             last_text = current_text
             page.wait_for_timeout(1_500)
@@ -338,7 +361,12 @@ class PlatformAdapter(ABC):
         html_path = prefix.with_suffix(".html")
         raw_text_path = prefix.with_suffix(".txt")
 
-        page.screenshot(path=str(screenshot_path), full_page=True)
+        capture_long_screenshot(
+            page,
+            screenshot_path,
+            scroll_selectors=self.selectors.screenshot_scroll_selectors,
+            answer_selectors=self.selectors.answer_container_selectors,
+        )
         html_path.write_text(page.content(), encoding="utf-8")
         raw_text_path.write_text(self.extract_answer_text(page), encoding="utf-8")
 

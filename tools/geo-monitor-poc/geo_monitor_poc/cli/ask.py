@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 from geo_monitor_poc.config import PLATFORM_SELECTORS
-from geo_monitor_poc.models import AccountConfig, PlatformId
+from geo_monitor_poc.models import AccountConfig, PlatformId, ProbeStatus
 from geo_monitor_poc.probe_runner import run_probe
 from geo_monitor_poc.utils import build_run_dir, find_account, load_accounts, now_ms
 
@@ -17,7 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     @return ArgumentParser
     """
     parser = argparse.ArgumentParser(
-        description="单题快速测试：打开页面、输入问题、抓取回答（豆包可不登录）",
+        description="单题快速测试：打开页面、输入问题、抓取回答",
     )
     parser.add_argument(
         "--platform",
@@ -47,9 +47,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="证据输出目录",
     )
     parser.add_argument(
+        "--production",
+        action="store_true",
+        help="生产模式：无头 + 非交互；遇验证码立即失败并告警",
+    )
+    parser.add_argument(
         "--headless",
         action="store_true",
-        help="无头模式；出现验证码时无法人工处理",
+        help="无头模式；出现验证码时退出并告警（不阻塞等待）",
     )
     parser.add_argument(
         "--no-interactive",
@@ -59,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--require-login",
         action="store_true",
-        help="强制检查登录态；豆包访客模式不要加此参数",
+        help="强制检查登录态（豆包/DeepSeek/元宝建议开启；访客约 5 轮后需登录）",
     )
     return parser
 
@@ -114,14 +119,19 @@ def run_ask(args: argparse.Namespace) -> int:
     evidence_dir = build_run_dir(Path(args.output), platform, account.id)
 
     skip_login_check = not args.require_login and selectors.guest_mode_allowed
-    interactive = not args.headless and not args.no_interactive
+    headless = args.headless or args.production
+    interactive = not headless and not args.no_interactive and not args.production
 
     print("=" * 60)
     print(f"平台: {platform.value}")
     print(f"账号/profile: {account.id} -> {Path(account.profile_dir).resolve()}")
     print(f"访客模式: {'是' if skip_login_check else '否'}")
-    print(f"无头模式: {'是' if args.headless else '否（可见浏览器，便于观察输入过程）'}")
-    print(f"交互暂停: {'是（验证码时会等待你在终端按 Enter）' if interactive else '否'}")
+    print(f"无头模式: {'是' if headless else '否（可见浏览器，便于观察输入过程）'}")
+    if args.production:
+        print("生产模式: 是（验证码将告警后退出，不阻塞）")
+    print(
+        f"交互暂停: {'是（验证码时会等待你在终端按 Enter）' if interactive else '否（生产/无头推荐）'}"
+    )
     print(f"问题: {args.question}")
     print("=" * 60)
 
@@ -130,7 +140,7 @@ def run_ask(args: argparse.Namespace) -> int:
         prompt_id=f"ask_{now_ms()}",
         prompt_text=args.question,
         evidence_dir=evidence_dir,
-        headless=args.headless,
+        headless=headless,
         skip_login_check=skip_login_check,
         interactive=interactive,
     )
@@ -160,10 +170,24 @@ def run_ask(args: argparse.Namespace) -> int:
     print(f"HTML: {result.evidence.html_path}")
     print(f"目录: {evidence_dir.resolve()}")
 
+    if result.status == ProbeStatus.CAPTCHA:
+        print("")
+        if args.production or headless:
+            print("生产模式：已输出【生产告警】，请维护 profile 后重试:")
+        else:
+            print("出现验证码。请在可见浏览器中处理，或单独运行:")
+        print(
+            f"  ./run.sh captcha --platform {platform.value} "
+            f"--account-id {account.id}",
+        )
+
     if result.status.value in {"failed", "selector_miss", "needs_login"}:
         print("")
         print("若输入框未命中，可先运行:")
         print(f"  ./run.sh discover --platform {platform.value}")
+
+    if result.status == ProbeStatus.CAPTCHA:
+        return 2
 
     return 0 if result.answer_text.strip() else 1
 

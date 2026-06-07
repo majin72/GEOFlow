@@ -21,6 +21,13 @@ use App\Http\Controllers\Admin\CategoryController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\DistributionController;
 use App\Http\Controllers\Admin\ExternalFetchSettingsController;
+use App\Http\Controllers\Admin\GeoMonitoringAccountController;
+use App\Http\Controllers\Admin\GeoMonitoringBrowserProfileController;
+use App\Http\Controllers\Admin\GeoMonitoringController;
+use App\Http\Controllers\Admin\GeoMonitoringMaintenanceController;
+use App\Http\Controllers\Admin\GeoMonitoringProjectController;
+use App\Http\Controllers\Admin\GeoMonitoringProxyController;
+use App\Http\Controllers\Admin\GeoMonitoringRunOpsController;
 use App\Http\Controllers\Admin\ImageLibraryController;
 use App\Http\Controllers\Admin\KeywordLibraryController;
 use App\Http\Controllers\Admin\KnowledgeBaseController;
@@ -79,6 +86,59 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
         Route::post('welcome/dismiss', [AdminWelcomeController::class, 'dismiss'])->name('welcome.dismiss');
         Route::get('dashboard', [DashboardController::class, 'index'])->name('dashboard');
         Route::get('analytics', [AnalyticsController::class, 'index'])->name('analytics');
+
+        Route::prefix('geo-monitoring')->name('geo-monitoring.')->group(function () {
+            Route::get('/', [GeoMonitoringController::class, 'index'])->name('index');
+
+            Route::get('projects/create', [GeoMonitoringProjectController::class, 'create'])->name('projects.create');
+            Route::post('projects', [GeoMonitoringProjectController::class, 'store'])->name('projects.store');
+            Route::get('projects/{projectId}/edit', [GeoMonitoringProjectController::class, 'edit'])->name('projects.edit');
+            Route::put('projects/{projectId}', [GeoMonitoringProjectController::class, 'update'])->name('projects.update');
+            Route::post('projects/{projectId}/deactivate', [GeoMonitoringProjectController::class, 'deactivate'])->name('projects.deactivate');
+
+            Route::get('projects/{projectId}', [GeoMonitoringController::class, 'showProject'])->name('project');
+            Route::post('projects/{projectId}/runs', [GeoMonitoringController::class, 'storeRun'])->name('runs.store');
+
+            Route::get('accounts', [GeoMonitoringAccountController::class, 'index'])->name('accounts.index');
+            Route::get('accounts/create', [GeoMonitoringAccountController::class, 'create'])->name('accounts.create');
+            Route::post('accounts', [GeoMonitoringAccountController::class, 'store'])->name('accounts.store');
+            Route::get('accounts/{accountId}/edit', [GeoMonitoringAccountController::class, 'edit'])->name('accounts.edit');
+            Route::put('accounts/{accountId}', [GeoMonitoringAccountController::class, 'update'])->name('accounts.update');
+            Route::post('accounts/{accountId}/toggle', [GeoMonitoringAccountController::class, 'toggle'])->name('accounts.toggle');
+            Route::post('accounts/sync-sidecar', [GeoMonitoringAccountController::class, 'syncSidecarAccounts'])->name('accounts.sync-sidecar');
+            Route::post('accounts/clear-stale-locks', [GeoMonitoringAccountController::class, 'clearStaleLocks'])->name('accounts.clear-stale-locks');
+            Route::get('accounts/{accountId}/maintenance', [GeoMonitoringMaintenanceController::class, 'show'])->name('accounts.maintenance');
+            Route::post('accounts/{accountId}/maintenance/start', [GeoMonitoringMaintenanceController::class, 'start'])->name('accounts.maintenance.start');
+            Route::post('accounts/{accountId}/maintenance/launch-browser', [GeoMonitoringMaintenanceController::class, 'launchBrowser'])->name('accounts.maintenance.launch-browser');
+            Route::post('accounts/{accountId}/maintenance/save-browser', [GeoMonitoringMaintenanceController::class, 'saveBrowser'])->name('accounts.maintenance.save-browser');
+            Route::post('accounts/{accountId}/maintenance/health', [GeoMonitoringMaintenanceController::class, 'healthCheck'])->name('accounts.maintenance.health');
+            Route::post('accounts/{accountId}/maintenance/complete', [GeoMonitoringMaintenanceController::class, 'complete'])->name('accounts.maintenance.complete');
+
+            Route::get('proxies', [GeoMonitoringProxyController::class, 'index'])->name('proxies.index');
+            Route::get('proxies/create', [GeoMonitoringProxyController::class, 'create'])->name('proxies.create');
+            Route::post('proxies', [GeoMonitoringProxyController::class, 'store'])->name('proxies.store');
+            Route::get('proxies/{proxyId}/edit', [GeoMonitoringProxyController::class, 'edit'])->name('proxies.edit');
+            Route::put('proxies/{proxyId}', [GeoMonitoringProxyController::class, 'update'])->name('proxies.update');
+            Route::post('proxies/{proxyId}/toggle', [GeoMonitoringProxyController::class, 'toggle'])->name('proxies.toggle');
+
+            Route::get('profiles', [GeoMonitoringBrowserProfileController::class, 'index'])->name('profiles.index');
+            Route::get('profiles/create', [GeoMonitoringBrowserProfileController::class, 'create'])->name('profiles.create');
+            Route::post('profiles', [GeoMonitoringBrowserProfileController::class, 'store'])->name('profiles.store');
+            Route::get('profiles/{profileId}/edit', [GeoMonitoringBrowserProfileController::class, 'edit'])->name('profiles.edit');
+            Route::put('profiles/{profileId}', [GeoMonitoringBrowserProfileController::class, 'update'])->name('profiles.update');
+
+            Route::get('runs/{runId}', [GeoMonitoringController::class, 'showRun'])->name('run');
+            Route::post('runs/{runId}/cancel', [GeoMonitoringRunOpsController::class, 'cancelRun'])->name('runs.cancel');
+            Route::post('runs/{runId}/retry-failed', [GeoMonitoringRunOpsController::class, 'retryFailed'])->name('runs.retry-failed');
+            Route::post('runs/{runId}/observations/{observationId}/retry', [GeoMonitoringRunOpsController::class, 'retryObservation'])
+                ->name('observations.retry');
+            Route::get('runs/{runId}/observations/{observationId}/evidence/{type}', [GeoMonitoringRunOpsController::class, 'showEvidence'])
+                ->where('type', 'png|html|txt|md')
+                ->name('observations.evidence');
+            Route::get('runs/{runId}/observations/{observationId}/evidence/{type}/download', [GeoMonitoringRunOpsController::class, 'downloadEvidence'])
+                ->where('type', 'png|html|txt|md')
+                ->name('observations.evidence.download');
+        });
 
         Route::prefix('system-updates')->name('system-updates.')->group(function () {
             Route::get('/', [SystemUpdateController::class, 'index'])->name('index');
