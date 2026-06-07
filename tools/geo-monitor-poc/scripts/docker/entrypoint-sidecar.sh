@@ -4,7 +4,7 @@ set -eu
 
 cd /app
 
-./scripts/novnc/start-novnc.sh
+sh ./scripts/novnc/start-novnc.sh
 
 exec python -m geo_monitor_poc serve \
   --host 0.0.0.0 \
