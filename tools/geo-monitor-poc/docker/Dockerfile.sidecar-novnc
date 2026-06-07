@@ -52,4 +52,4 @@ RUN chmod +x scripts/novnc/*.sh scripts/docker/entrypoint-sidecar.sh run.sh 2>/d
 
 EXPOSE 6080 8765
 
-CMD ["sh", "./scripts/docker/entrypoint-sidecar.sh"]
+CMD ["bash", "./scripts/docker/entrypoint-sidecar.sh"]
