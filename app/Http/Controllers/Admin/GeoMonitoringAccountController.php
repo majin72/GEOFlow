@@ -180,7 +180,7 @@ class GeoMonitoringAccountController extends Controller
     {
         try {
             $path = $exporter->exportToPocRoot();
-        } catch (\RuntimeException $exception) {
+        } catch (\Throwable $exception) {
             return redirect()
                 ->route('admin.geo-monitoring.accounts.index')
                 ->withErrors($exception->getMessage());

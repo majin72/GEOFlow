@@ -18,11 +18,14 @@ class GeoMonitorMaintenanceTest extends TestCase
     use RefreshDatabase;
 
     /**
-     * 无头 Linux 模式维护页应展示 noVNC 命令。
+     * sidecar 未启用时，无头 Linux 维护页应展示手动 noVNC 命令。
      */
-    public function test_maintenance_page_renders_novnc_commands_in_headless_mode(): void
+    public function test_maintenance_page_renders_novnc_commands_when_sidecar_disabled(): void
     {
-        config(['geoflow.geo_monitor.runtime' => 'headless_linux']);
+        config([
+            'geoflow.geo_monitor.runtime' => 'headless_linux',
+            'geoflow.geo_monitor.enabled' => false,
+        ]);
 
         $account = $this->seedAccount('needs_maintenance');
 
@@ -31,7 +34,32 @@ class GeoMonitorMaintenanceTest extends TestCase
             ->assertOk()
             ->assertSee('start-novnc.sh')
             ->assertSee('scripts/novnc/maintain-profile.sh')
+            ->assertDontSee(__('admin.geo_monitoring.maintenance_launch_browser_button'))
             ->assertSee($account->external_id);
+    }
+
+    /**
+     * Docker 生产（headless_linux + sidecar）应展示后台一键登录，而非服务器 SSH 命令。
+     */
+    public function test_maintenance_page_shows_one_click_login_in_headless_with_sidecar(): void
+    {
+        config([
+            'geoflow.geo_monitor.runtime' => 'headless_linux',
+            'geoflow.geo_monitor.enabled' => true,
+            'geoflow.geo_monitor.sidecar_url' => 'http://sidecar.test',
+            'geoflow.geo_monitor.novnc.ssh_tunnel_hint_host' => 'ecs-user@203.0.113.10',
+        ]);
+
+        $account = $this->seedAccount('needs_login');
+
+        $this->actingAs($this->createAdmin(), 'admin')
+            ->get(route('admin.geo-monitoring.accounts.maintenance', ['accountId' => $account->id]))
+            ->assertOk()
+            ->assertSee(__('admin.geo_monitoring.maintenance_interactive_title_novnc'))
+            ->assertSee(__('admin.geo_monitoring.maintenance_launch_browser_button'))
+            ->assertSee('ssh -N -L 6080:127.0.0.1:6080 ecs-user@203.0.113.10')
+            ->assertDontSee('start-novnc.sh')
+            ->assertDontSee('maintain-profile.sh');
     }
 
     /**
@@ -80,6 +108,38 @@ class GeoMonitorMaintenanceTest extends TestCase
         $this->assertSame('in_progress', $event->status);
         $this->assertSame('novnc', $event->maintenance_via); // default headless_linux
         $this->assertSame($admin->id, $event->operator_admin_id);
+    }
+
+    /**
+     * 无头 Linux + sidecar 也应能一键拉起维护浏览器。
+     */
+    public function test_launch_browser_works_in_headless_linux_with_sidecar(): void
+    {
+        config([
+            'geoflow.geo_monitor.runtime' => 'headless_linux',
+            'geoflow.geo_monitor.enabled' => true,
+            'geoflow.geo_monitor.sidecar_url' => 'http://sidecar.test',
+        ]);
+
+        $admin = $this->createAdmin();
+        $account = $this->seedAccount('needs_login');
+
+        Http::fake([
+            'http://sidecar.test/v1/maintenance/sessions' => Http::response([
+                'ok' => true,
+                'data' => [
+                    'session_id' => 'sess-headless-01',
+                    'status' => 'opening',
+                    'profile_path' => 'profiles/deepseek_account_01',
+                    'chat_url' => 'https://chat.deepseek.com/',
+                ],
+            ]),
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.geo-monitoring.accounts.maintenance.launch-browser', ['accountId' => $account->id]))
+            ->assertRedirect(route('admin.geo-monitoring.accounts.maintenance', ['accountId' => $account->id]))
+            ->assertSessionHas('geo_monitor_maintenance_session.session_id', 'sess-headless-01');
     }
 
     /**

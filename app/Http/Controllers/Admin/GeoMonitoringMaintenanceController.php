@@ -73,7 +73,7 @@ class GeoMonitoringMaintenanceController extends Controller
     }
 
     /**
-     * 一键拉起可见浏览器（headed_desktop + sidecar）。
+     * 一键拉起可见浏览器（sidecar 可用；无头 Linux 通过 noVNC 远程桌面展示）。
      */
     public function launchBrowser(
         Request $request,

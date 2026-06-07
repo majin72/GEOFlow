@@ -11,6 +11,28 @@ $defaultUpdateMetadataUrl = 'https://raw.githubusercontent.com/yaojingang/GEOFlo
 $updateMetadataUrl = trim((string) env('GEOFLOW_UPDATE_METADATA_URL', $defaultUpdateMetadataUrl));
 $updateMetadataUrl = $updateMetadataUrl !== '' ? $updateMetadataUrl : $defaultUpdateMetadataUrl;
 
+/**
+ * 将 GEO 监测 POC/证据路径解析为容器内可用的绝对路径。
+ * 空 env 回退 defaultRelative；相对路径基于 Laravel base_path。
+ *
+ * @param  string  $envKey  环境变量名
+ * @param  string  $defaultRelative  相对项目根目录的默认路径
+ */
+$resolveGeoMonitorPath = static function (string $envKey, string $defaultRelative): string {
+    $raw = trim((string) env($envKey, ''));
+    if ($raw === '') {
+        return rtrim(base_path($defaultRelative), '/');
+    }
+    if (! str_starts_with($raw, '/')) {
+        return rtrim(base_path($raw), '/');
+    }
+
+    return rtrim($raw, '/');
+};
+
+$geoMonitorPocRoot = $resolveGeoMonitorPath('GEOFLOW_GEO_MONITOR_POC_ROOT', 'tools/geo-monitor-poc');
+$geoMonitorEvidenceRoot = $resolveGeoMonitorPath('GEOFLOW_GEO_MONITOR_EVIDENCE_ROOT', 'tools/geo-monitor-poc/evidence/sidecar');
+
 return [
 
     // 站点展示名称（页眉、标题等）
@@ -155,10 +177,7 @@ return [
         'probe_timeout_seconds' => max(30, (int) env('GEOFLOW_GEO_MONITOR_PROBE_TIMEOUT', 150)),
         'evidence_disk' => (string) env('GEOFLOW_GEO_MONITOR_EVIDENCE_DISK', 'local'),
         'evidence_path_prefix' => trim((string) env('GEOFLOW_GEO_MONITOR_EVIDENCE_PREFIX', 'geo-monitor/evidence'), '/'),
-        'evidence_root' => (string) env(
-            'GEOFLOW_GEO_MONITOR_EVIDENCE_ROOT',
-            base_path('tools/geo-monitor-poc/evidence/sidecar'),
-        ),
+        'evidence_root' => $geoMonitorEvidenceRoot,
         'scoring_weights' => [
             'brand_mention' => 0.35,
             'own_citation' => 0.35,
@@ -176,10 +195,7 @@ return [
         ],
         'novnc' => [
             'enabled' => filter_var(env('GEOFLOW_GEO_MONITOR_NOVNC_ENABLED', true), FILTER_VALIDATE_BOOLEAN),
-            'poc_root' => (string) env(
-                'GEOFLOW_GEO_MONITOR_POC_ROOT',
-                base_path('tools/geo-monitor-poc'),
-            ),
+            'poc_root' => $geoMonitorPocRoot,
             'bind_host' => (string) env('GEOFLOW_GEO_MONITOR_NOVNC_BIND', '127.0.0.1'),
             'port' => max(1024, (int) env('GEOFLOW_GEO_MONITOR_NOVNC_PORT', 6080)),
             'display' => (string) env('GEOFLOW_GEO_MONITOR_DISPLAY', ':99'),

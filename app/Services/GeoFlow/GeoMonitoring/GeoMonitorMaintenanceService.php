@@ -91,33 +91,24 @@ class GeoMonitorMaintenanceService
             'maintain_mode' => $maintainMode,
             'profile_path' => $account->profile_storage_path,
             'proxy_label' => $account->proxyEndpoint?->label,
-            'steps' => $this->runtime->isHeadlessLinux()
-                ? [
-                    __('admin.geo_monitoring.maintenance_step_sync'),
-                    __('admin.geo_monitoring.maintenance_step_start'),
-                    __('admin.geo_monitoring.maintenance_step_tunnel'),
-                    __('admin.geo_monitoring.maintenance_step_novnc'),
-                    __('admin.geo_monitoring.maintenance_step_maintain'),
-                    __('admin.geo_monitoring.maintenance_step_health'),
-                ]
-                : ($this->supportsInteractiveBrowser()
-                    ? [
-                        __('admin.geo_monitoring.maintenance_step_interactive_launch'),
-                        __('admin.geo_monitoring.maintenance_step_interactive_login'),
-                        __('admin.geo_monitoring.maintenance_step_interactive_save'),
-                        __('admin.geo_monitoring.maintenance_step_health'),
-                    ]
-                    : [
-                        __('admin.geo_monitoring.maintenance_step_sync'),
-                        __('admin.geo_monitoring.maintenance_step_headed_maintain'),
-                        __('admin.geo_monitoring.maintenance_step_headed_browser'),
-                        __('admin.geo_monitoring.maintenance_step_health'),
-                    ]),
+            'steps' => $this->resolveMaintenanceSteps(),
             'supports_interactive' => $this->supportsInteractiveBrowser(),
             'command_blocks' => [],
         ];
 
-        if ($this->runtime->isHeadlessLinux()) {
+        if ($this->supportsInteractiveBrowser()) {
+            if ($this->runtime->isHeadlessLinux()) {
+                /** @var array<string, mixed> $novnc */
+                $novnc = config('geoflow.geo_monitor.novnc', []);
+                $port = max(1024, (int) ($novnc['port'] ?? 6080));
+                $sshHost = trim((string) ($novnc['ssh_tunnel_hint_host'] ?? ''));
+
+                $context['novnc_local_url'] = sprintf('http://127.0.0.1:%d/vnc.html', $port);
+                $context['ssh_tunnel_command'] = $sshHost !== ''
+                    ? sprintf('ssh -N -L %d:127.0.0.1:%d %s', $port, $port, $sshHost)
+                    : sprintf('ssh -N -L %d:127.0.0.1:%d user@your-server', $port, $port);
+            }
+        } elseif ($this->runtime->isHeadlessLinux()) {
             /** @var array<string, mixed> $novnc */
             $novnc = config('geoflow.geo_monitor.novnc', []);
             $port = max(1024, (int) ($novnc['port'] ?? 6080));
@@ -197,11 +188,56 @@ class GeoMonitorMaintenanceService
     }
 
     /**
-     * 是否支持后台一键拉起浏览器（仅 headed_desktop + sidecar 可用）。
+     * 是否支持后台一键拉起浏览器（sidecar 可用即可；无头 Linux 通过 noVNC 远程桌面展示）。
      */
     public function supportsInteractiveBrowser(): bool
     {
-        return $this->runtime->isHeadedDesktop() && $this->bridgeClient->isOperational();
+        return $this->bridgeClient->isOperational();
+    }
+
+    /**
+     * 维护页步骤文案（交互式优先，否则回退到手动命令流程）。
+     *
+     * @return list<string>
+     */
+    private function resolveMaintenanceSteps(): array
+    {
+        if ($this->supportsInteractiveBrowser()) {
+            if ($this->runtime->isHeadlessLinux()) {
+                return [
+                    __('admin.geo_monitoring.maintenance_step_interactive_novnc_tunnel'),
+                    __('admin.geo_monitoring.maintenance_step_interactive_launch'),
+                    __('admin.geo_monitoring.maintenance_step_interactive_novnc_login'),
+                    __('admin.geo_monitoring.maintenance_step_interactive_save'),
+                    __('admin.geo_monitoring.maintenance_step_health'),
+                ];
+            }
+
+            return [
+                __('admin.geo_monitoring.maintenance_step_interactive_launch'),
+                __('admin.geo_monitoring.maintenance_step_interactive_login'),
+                __('admin.geo_monitoring.maintenance_step_interactive_save'),
+                __('admin.geo_monitoring.maintenance_step_health'),
+            ];
+        }
+
+        if ($this->runtime->isHeadlessLinux()) {
+            return [
+                __('admin.geo_monitoring.maintenance_step_sync'),
+                __('admin.geo_monitoring.maintenance_step_start'),
+                __('admin.geo_monitoring.maintenance_step_tunnel'),
+                __('admin.geo_monitoring.maintenance_step_novnc'),
+                __('admin.geo_monitoring.maintenance_step_maintain'),
+                __('admin.geo_monitoring.maintenance_step_health'),
+            ];
+        }
+
+        return [
+            __('admin.geo_monitoring.maintenance_step_sync'),
+            __('admin.geo_monitoring.maintenance_step_headed_maintain'),
+            __('admin.geo_monitoring.maintenance_step_headed_browser'),
+            __('admin.geo_monitoring.maintenance_step_health'),
+        ];
     }
 
     /**

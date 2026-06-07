@@ -40,8 +40,34 @@
 
                 @if ($guide['supports_interactive'] ?? false)
                     <div class="rounded-lg border-2 border-blue-200 bg-gradient-to-br from-blue-50 to-white p-6 shadow-sm">
-                        <h2 class="text-lg font-semibold text-gray-900">{{ __('admin.geo_monitoring.maintenance_interactive_title') }}</h2>
-                        <p class="mt-2 text-sm text-gray-600">{{ __('admin.geo_monitoring.maintenance_interactive_desc') }}</p>
+                        @php($isNovncInteractive = ($guide['runtime_mode'] ?? '') === 'headless_linux')
+                        <h2 class="text-lg font-semibold text-gray-900">
+                            {{ $isNovncInteractive
+                                ? __('admin.geo_monitoring.maintenance_interactive_title_novnc')
+                                : __('admin.geo_monitoring.maintenance_interactive_title') }}
+                        </h2>
+                        <p class="mt-2 text-sm text-gray-600">
+                            {{ $isNovncInteractive
+                                ? __('admin.geo_monitoring.maintenance_interactive_desc_novnc')
+                                : __('admin.geo_monitoring.maintenance_interactive_desc') }}
+                        </p>
+
+                        @if ($isNovncInteractive && ! empty($guide['ssh_tunnel_command']))
+                            <div class="mt-4 space-y-3 rounded-md border border-blue-200 bg-white p-4">
+                                <div>
+                                    <div class="text-sm font-medium text-gray-800">{{ __('admin.geo_monitoring.maintenance_ssh_tunnel_label') }}</div>
+                                    <pre class="mt-2 overflow-x-auto rounded-md bg-gray-900 p-3 text-xs text-gray-100"><code>{{ $guide['ssh_tunnel_command'] }}</code></pre>
+                                </div>
+                                <div>
+                                    <div class="text-sm font-medium text-gray-800">{{ __('admin.geo_monitoring.maintenance_novnc_url') }}</div>
+                                    <a href="{{ $guide['novnc_local_url'] ?? '#' }}" target="_blank" rel="noopener noreferrer" class="mt-1 inline-block font-mono text-sm text-blue-700 underline hover:text-blue-900">
+                                        {{ $guide['novnc_local_url'] ?? '' }}
+                                    </a>
+                                    <p class="mt-2 text-xs text-gray-500">{{ __('admin.geo_monitoring.maintenance_security_hint') }}</p>
+                                </div>
+                            </div>
+                        @endif
+
                         <ol class="mt-4 list-decimal space-y-2 pl-5 text-sm text-gray-700">
                             @foreach ($guide['steps'] as $step)
                                 <li>{{ $step }}</li>
@@ -51,7 +77,11 @@
                         @if (is_array($interactiveSession) && ! empty($interactiveSession['session_id']))
                             <div class="mt-5 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
                                 <div class="font-medium">{{ __('admin.geo_monitoring.maintenance_browser_open') }}</div>
-                                <div class="mt-1 text-xs text-emerald-800">{{ __('admin.geo_monitoring.maintenance_browser_open_hint') }}</div>
+                                <div class="mt-1 text-xs text-emerald-800">
+                                    {{ $isNovncInteractive
+                                        ? __('admin.geo_monitoring.maintenance_browser_open_hint_novnc')
+                                        : __('admin.geo_monitoring.maintenance_browser_open_hint') }}
+                                </div>
                                 @if (! empty($interactiveSession['chat_url']))
                                     <div class="mt-2 font-mono text-xs break-all">{{ $interactiveSession['chat_url'] }}</div>
                                 @endif
@@ -94,11 +124,11 @@
                 @endif
 
                 <div class="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
-                    @if (($guide['runtime_mode'] ?? '') === 'headless_linux')
+                    @if (($guide['runtime_mode'] ?? '') === 'headless_linux' && ! ($guide['supports_interactive'] ?? false))
                         <div class="font-medium">{{ __('admin.geo_monitoring.maintenance_novnc_url') }}</div>
                         <div class="mt-1 font-mono">{{ $guide['novnc_local_url'] ?? '' }}</div>
                         <div class="mt-2 text-xs text-blue-800">{{ __('admin.geo_monitoring.maintenance_security_hint') }}</div>
-                    @else
+                    @elseif (($guide['runtime_mode'] ?? '') !== 'headless_linux')
                         <div class="font-medium">{{ __('admin.geo_monitoring.maintenance_headed_hint_title') }}</div>
                         <div class="mt-2 text-xs text-blue-800">{{ __('admin.geo_monitoring.maintenance_headed_hint') }}</div>
                     @endif
