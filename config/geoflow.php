@@ -31,7 +31,7 @@ $resolveGeoMonitorPath = static function (string $envKey, string $defaultRelativ
 };
 
 $geoMonitorPocRoot = $resolveGeoMonitorPath('GEOFLOW_GEO_MONITOR_POC_ROOT', 'tools/geo-monitor-poc');
-$geoMonitorEvidenceRoot = $resolveGeoMonitorPath('GEOFLOW_GEO_MONITOR_EVIDENCE_ROOT', 'tools/geo-monitor-poc/evidence/sidecar');
+$geoMonitorEvidenceRoot = $resolveGeoMonitorPath('GEOFLOW_GEO_MONITOR_EVIDENCE_ROOT', 'storage/app/geo-monitor/evidence');
 
 return [
 

@@ -64,6 +64,7 @@ class AppServiceProvider extends ServiceProvider
             );
         });
         $this->app->singleton(GeoMonitorProbePersister::class);
+        $this->app->singleton(GeoMonitorEvidenceRepairService::class);
         $this->app->singleton(GeoMonitorRuntimeConfig::class, fn (): GeoMonitorRuntimeConfig => GeoMonitorRuntimeConfig::fromConfig());
         $this->app->singleton(GeoMonitorResourceScheduler::class, fn (): GeoMonitorResourceScheduler => GeoMonitorResourceScheduler::fromConfig());
         $this->app->singleton(GeoMonitorResourceHealthService::class, fn (): GeoMonitorResourceHealthService => GeoMonitorResourceHealthService::fromConfig());
@@ -79,6 +80,8 @@ class AppServiceProvider extends ServiceProvider
     {
         Http::globalMiddleware(OutboundHttpProxy::middleware());
 
+        $this->ensureGeoMonitorEvidenceDirectory();
+
         View::composer(['site.layout', 'theme.*.layout'], SiteLayoutComposer::class);
 
         View::composer('admin.layouts.app', function ($view): void {
@@ -92,5 +95,23 @@ class AppServiceProvider extends ServiceProvider
                 $admin instanceof Admin ? app(AdminUpdateMetadataService::class)->buildNotificationPayload() : null
             );
         });
+    }
+
+    /**
+     * GEO 监测启用时确保证据目录存在（storage 挂载点，与 sidecar 共用）。
+     */
+    private function ensureGeoMonitorEvidenceDirectory(): void
+    {
+        if (! (bool) config('geoflow.geo_monitor.enabled', false)) {
+            return;
+        }
+
+        $evidenceRoot = trim((string) config('geoflow.geo_monitor.evidence_root', ''));
+
+        if ($evidenceRoot === '' || is_dir($evidenceRoot)) {
+            return;
+        }
+
+        @mkdir($evidenceRoot, 0775, true);
     }
 }

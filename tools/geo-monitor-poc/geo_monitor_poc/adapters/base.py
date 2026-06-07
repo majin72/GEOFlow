@@ -345,6 +345,30 @@ class PlatformAdapter(ABC):
 
         return merge_citations(dom_links, text_links)
 
+    def _ensure_shared_evidence_permissions(self, evidence_dir: Path, *paths: Path) -> None:
+        """
+        Docker bind mount 下 sidecar（常为 root）写入后，确保 app 容器 www-data 可读。
+
+        @param evidence_dir 证据目录
+        @param paths 已写入的文件路径
+        """
+        try:
+            for directory in [evidence_dir, *evidence_dir.parents]:
+                if not directory.is_dir():
+                    continue
+                directory.chmod(0o775)
+                if directory.name in {"evidence", "geo-monitor", "storage"} or str(directory) in {"/app", "/var/www/html", "/"}:
+                    break
+        except OSError:
+            pass
+
+        for path in paths:
+            try:
+                if path.is_file():
+                    path.chmod(0o664)
+            except OSError:
+                pass
+
     def save_evidence(self, page: Any, evidence_dir: Path, prompt_id: str) -> ProbeEvidence:
         """
         保存截图、HTML 与文本证据。
@@ -369,6 +393,8 @@ class PlatformAdapter(ABC):
         )
         html_path.write_text(page.content(), encoding="utf-8")
         raw_text_path.write_text(self.extract_answer_text(page), encoding="utf-8")
+
+        self._ensure_shared_evidence_permissions(evidence_dir, screenshot_path, html_path, raw_text_path)
 
         return ProbeEvidence(
             screenshot_path=str(screenshot_path),

@@ -43,7 +43,7 @@ final class GeoMonitorConfig
             probeTimeoutSeconds: max(30, (int) ($config['probe_timeout_seconds'] ?? 150)),
             evidenceDisk: (string) ($config['evidence_disk'] ?? 'local'),
             evidencePathPrefix: trim((string) ($config['evidence_path_prefix'] ?? 'geo-monitor/evidence'), '/'),
-            evidenceRoot: rtrim((string) ($config['evidence_root'] ?? base_path('tools/geo-monitor-poc/evidence/sidecar')), '/'),
+            evidenceRoot: rtrim((string) ($config['evidence_root'] ?? storage_path('app/geo-monitor/evidence')), '/'),
         );
     }
 

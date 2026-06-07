@@ -22,6 +22,7 @@ class GeoMonitorEvidenceService
     public function __construct(
         private readonly GeoMonitorConfig $config,
         private readonly GeoMonitorEvidencePathResolver $pathResolver,
+        private readonly GeoMonitorEvidenceRepairService $repairService,
     ) {}
 
     /**
@@ -32,11 +33,27 @@ class GeoMonitorEvidenceService
      */
     public function resolveReadablePath(GeoMonitorObservation $observation, string $type): ?string
     {
-        return $this->pathResolver->resolveForObservation(
+        $path = $this->pathResolver->resolveForObservation(
             $observation,
             $type,
             $this->config->evidenceRoot,
         );
+
+        if ($path !== null) {
+            return $path;
+        }
+
+        if ($this->repairService->repairObservation($observation)) {
+            $observation->refresh();
+
+            return $this->pathResolver->resolveForObservation(
+                $observation,
+                $type,
+                $this->config->evidenceRoot,
+            );
+        }
+
+        return null;
     }
 
     /**
@@ -75,6 +92,29 @@ class GeoMonitorEvidenceService
      * @return list<string>
      */
     public function availableTypes(GeoMonitorObservation $observation): array
+    {
+        $available = $this->collectAvailableTypes($observation);
+
+        if ($available !== []) {
+            return $available;
+        }
+
+        if ($this->repairService->repairObservation($observation)) {
+            $observation->refresh();
+
+            return $this->collectAvailableTypes($observation);
+        }
+
+        return [];
+    }
+
+    /**
+     * 按当前数据库路径解析可用证据类型。
+     *
+     * @param  GeoMonitorObservation  $observation  观测记录
+     * @return list<string>
+     */
+    private function collectAvailableTypes(GeoMonitorObservation $observation): array
     {
         $available = [];
 

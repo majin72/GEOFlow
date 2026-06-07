@@ -92,6 +92,49 @@ class GeoMonitorEvidencePathResolverTest extends TestCase
     }
 
     /**
+     * 配置的 sidecar 子目录不存在时，应回退到 legacy evidence 父目录。
+     */
+    public function test_resolves_when_configured_sidecar_root_missing(): void
+    {
+        $legacyRoot = sys_get_temp_dir().'/geo-evidence-missing-sidecar-'.uniqid();
+        $relativeDir = 'yuanbao/yuanbao_account_01/20260604T120000Z/laravel-run-1';
+        $fullDir = $legacyRoot.'/'.$relativeDir;
+        mkdir($fullDir, 0777, true);
+        $file = $fullDir.'/brand_generic.txt';
+        file_put_contents($file, 'answer text');
+
+        $missingSidecarRoot = $legacyRoot.'/sidecar';
+
+        $resolver = new GeoMonitorEvidencePathResolver;
+        $storedPath = 'yuanbao/yuanbao_account_01/20260604T120000Z/laravel-run-1/brand_generic.txt';
+
+        $resolved = $resolver->resolveStoredPath($storedPath, $missingSidecarRoot);
+
+        $this->assertSame(realpath($file), $resolved);
+
+        @unlink($file);
+        @rmdir($fullDir);
+        @rmdir($legacyRoot.'/yuanbao/yuanbao_account_01/20260604T120000Z');
+        @rmdir($legacyRoot.'/yuanbao/yuanbao_account_01');
+        @rmdir($legacyRoot.'/yuanbao');
+        @rmdir($legacyRoot);
+    }
+
+    /**
+     * storage 绝对路径应归一化为相对路径。
+     */
+    public function test_normalizes_storage_absolute_path(): void
+    {
+        $resolver = new GeoMonitorEvidencePathResolver;
+        $storedPath = '/var/www/html/storage/app/geo-monitor/evidence/yuanbao/yuanbao_account_01/run/prompt.txt';
+
+        $this->assertSame(
+            'yuanbao/yuanbao_account_01/run/prompt.txt',
+            $resolver->normalizeStoredPath($storedPath),
+        );
+    }
+
+    /**
      * 根目录外的绝对路径应被拒绝。
      */
     public function test_rejects_absolute_path_outside_root(): void

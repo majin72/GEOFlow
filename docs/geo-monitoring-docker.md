@@ -18,9 +18,12 @@ flowchart TB
   queue --> sidecar
   web --> pg
   queue --> redis
-  sidecar --> poc["./tools/geo-monitor-poc\naccounts.json / profiles / evidence"]
+  sidecar --> poc["./tools/geo-monitor-poc\naccounts.json / profiles"]
+  sidecar --> storage["./storage/app/geo-monitor/evidence"]
   web --> poc
   queue --> poc
+  web --> storage
+  queue --> storage
 ```
 
 Laravel 与 sidecar 通过 Compose 内网 DNS 通信：`http://geo-monitor-sidecar:8765`。
@@ -31,7 +34,7 @@ Laravel 与 sidecar 通过 Compose 内网 DNS 通信：`http://geo-monitor-sidec
 # 若尚无 accounts.json，从样例复制（Laravel 导出也会覆盖写入）
 cp tools/geo-monitor-poc/accounts.sample.json tools/geo-monitor-poc/accounts.json
 
-mkdir -p tools/geo-monitor-poc/profiles tools/geo-monitor-poc/evidence
+mkdir -p tools/geo-monitor-poc/profiles storage/app/geo-monitor/evidence
 ```
 
 ## 开发环境
@@ -44,6 +47,8 @@ GEOFLOW_GEO_MONITOR_RUNTIME=headless_linux
 GEOFLOW_GEO_MONITOR_SIDECAR_URL=http://geo-monitor-sidecar:8765
 GEOFLOW_GEO_MONITOR_SIDECAR_TOKEN=your-random-token
 GEOFLOW_GEO_MONITOR_POC_ROOT=tools/geo-monitor-poc
+# 证据目录（默认 storage/app/geo-monitor/evidence，与 ./storage 挂载共用）
+GEOFLOW_GEO_MONITOR_EVIDENCE_ROOT=storage/app/geo-monitor/evidence
 ```
 
 启动（带 `geo-monitor` profile）：
@@ -70,6 +75,8 @@ GEOFLOW_GEO_MONITOR_RUNTIME=headless_linux
 GEOFLOW_GEO_MONITOR_SIDECAR_URL=http://geo-monitor-sidecar:8765
 GEOFLOW_GEO_MONITOR_SIDECAR_TOKEN=your-random-token
 GEOFLOW_GEO_MONITOR_POC_ROOT=tools/geo-monitor-poc
+# 证据目录（默认 storage/app/geo-monitor/evidence，与 ./storage 挂载共用）
+GEOFLOW_GEO_MONITOR_EVIDENCE_ROOT=storage/app/geo-monitor/evidence
 ```
 
 ```bash
@@ -83,7 +90,9 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml --profile geo-mon
 docker compose --env-file .env.prod -f docker-compose.prod.yml --profile geo-monitor up -d --build
 ```
 
-生产 `app` / `queue` 已挂载 `./tools/geo-monitor-poc`，与 sidecar 共享 `accounts.json`、`profiles/`、`evidence/`。
+生产 `app` / `queue` / `sidecar` 共享：
+- `./tools/geo-monitor-poc` → 账号配置、浏览器 Profile
+- `./storage` → 探测证据 `storage/app/geo-monitor/evidence/`（宿主机可直接备份）
 
 ## noVNC 远程维护
 

@@ -20,6 +20,10 @@ x-prod-web-build-args: &prod_web_build_args
   VITE_REVERB_SCHEME: "${REVERB_SCHEME:-}"
   VITE_REVERB_PATH: "${REVERB_SERVER_PATH:-}"
 
+# 生产 `app` / `queue` 已挂载 `./tools/geo-monitor-poc`，与 sidecar 共享 `accounts.json`、`profiles/`。
+# 探测证据写入 `./storage/app/geo-monitor/evidence`（app 与 sidecar 均挂载 `./storage`）。
+x-geo-monitor-storage-volume: &geo_monitor_storage_volume ./storage:/var/www/html/storage
+
 # GEO 监测 sidecar（Chromium + noVNC）。仅在使用 --profile geo-monitor 时启动。
 x-geo-monitor-sidecar: &geo_monitor_sidecar
   profiles:
@@ -37,7 +41,9 @@ x-geo-monitor-sidecar: &geo_monitor_sidecar
     GEO_MONITOR_NOVNC_BIND: "0.0.0.0"
     GEO_MONITOR_NOVNC_PORT: "${GEOFLOW_GEO_MONITOR_NOVNC_PORT:-6080}"
     GEO_MONITOR_PROFILE_ROOT: "/app/profiles"
-    GEO_MONITOR_EVIDENCE_ROOT: "/app/evidence/sidecar"
+    GEO_MONITOR_EVIDENCE_ROOT: "/var/www/html/storage/app/geo-monitor/evidence"
+    GEO_MONITOR_APP_UID: "33"
+    GEO_MONITOR_APP_GID: "33"
     GEO_MONITOR_ACCOUNTS_FILE: "/app/accounts.json"
     GEO_MONITOR_SIDECAR_TOKEN: "${GEOFLOW_GEO_MONITOR_SIDECAR_TOKEN:-}"
     GEO_MONITOR_SIDECAR_HOST: "0.0.0.0"
@@ -47,11 +53,12 @@ x-geo-monitor-sidecar: &geo_monitor_sidecar
     - "127.0.0.1:${GEOFLOW_GEO_MONITOR_SIDECAR_PORT:-8765}:8765"
   volumes:
     - ./tools/geo-monitor-poc:/app
+    - *geo_monitor_storage_volume
     - geo-monitor-novnc-state:/app/.novnc-state
   shm_size: "1gb"
   restart: unless-stopped
 
-# 生产镜像内不含宿主机 POC 目录，app/queue 需挂载以共享 accounts.json / profiles / evidence。
+# 生产 `app` / `queue` 已挂载 `./tools/geo-monitor-poc`，与 sidecar 共享 accounts.json、profiles。
 x-geo-monitor-app-volume: &geo_monitor_app_volume ./tools/geo-monitor-poc:/var/www/html/tools/geo-monitor-poc
 
 services:
