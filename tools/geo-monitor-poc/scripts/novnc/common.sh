@@ -13,6 +13,11 @@ export GEO_MONITOR_NOVNC_PORT="${GEO_MONITOR_NOVNC_PORT:-6080}"
 export GEO_MONITOR_NOVNC_BIND="${GEO_MONITOR_NOVNC_BIND:-127.0.0.1}"
 export GEO_MONITOR_VNC_PASSWORD_FILE="${GEO_MONITOR_VNC_PASSWORD_FILE:-$POC_ROOT/.novnc-state/vnc.passwd}"
 
+# Docker 端口映射转发到容器网桥 IP，若 websockify 只绑 127.0.0.1 会导致宿主机 curl/SSH 隧道连接被重置。
+if [[ -f /.dockerenv && "$GEO_MONITOR_NOVNC_BIND" == "127.0.0.1" ]]; then
+  export GEO_MONITOR_NOVNC_BIND="0.0.0.0"
+fi
+
 STATE_DIR="$POC_ROOT/.novnc-state"
 XVFB_PID_FILE="$STATE_DIR/xvfb.pid"
 FLUXBOX_PID_FILE="$STATE_DIR/fluxbox.pid"

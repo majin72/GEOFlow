@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     GEO_MONITOR_CHROMIUM_EXECUTABLE=/usr/bin/chromium \
     GEO_MONITOR_DISPLAY=:99 \
-    GEO_MONITOR_NOVNC_BIND=127.0.0.1 \
+    GEO_MONITOR_NOVNC_BIND=0.0.0.0 \
     GEO_MONITOR_NOVNC_PORT=6080
 
 # Debian apt：阿里云（与 docker/Dockerfile.prod 一致）

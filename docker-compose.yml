@@ -25,13 +25,15 @@ x-geo-monitor-sidecar: &geo_monitor_sidecar
   environment:
     DISPLAY: ":99"
     GEO_MONITOR_DISPLAY: ":99"
-    GEO_MONITOR_NOVNC_BIND: "127.0.0.1"
+    # 容器内须 0.0.0.0，否则 Docker 端口映射无法转发；公网暴露由下方 127.0.0.1:6080 限制。
+    GEO_MONITOR_NOVNC_BIND: "0.0.0.0"
     GEO_MONITOR_NOVNC_PORT: "${GEOFLOW_GEO_MONITOR_NOVNC_PORT:-6080}"
     GEO_MONITOR_PROFILE_ROOT: "/app/profiles"
     GEO_MONITOR_EVIDENCE_ROOT: "/app/evidence"
     GEO_MONITOR_ACCOUNTS_FILE: "/app/accounts.json"
     GEO_MONITOR_SIDECAR_TOKEN: "${GEOFLOW_GEO_MONITOR_SIDECAR_TOKEN:-}"
     GEO_MONITOR_SIDECAR_HOST: "0.0.0.0"
+    GEO_MONITOR_SIDECAR_PORT: "${GEOFLOW_GEO_MONITOR_SIDECAR_PORT:-8765}"
   ports:
     - "127.0.0.1:${GEOFLOW_GEO_MONITOR_NOVNC_PORT:-6080}:6080"
     - "127.0.0.1:${GEOFLOW_GEO_MONITOR_SIDECAR_PORT:-8765}:8765"
@@ -40,9 +42,6 @@ x-geo-monitor-sidecar: &geo_monitor_sidecar
     - geo-monitor-novnc-state:/app/.novnc-state
   shm_size: "1gb"
   restart: unless-stopped
-  command: >
-    sh -c "./scripts/novnc/start-novnc.sh &&
-           python -m geo_monitor_poc serve --host 0.0.0.0 --port 8765"
 
 services:
   postgres:

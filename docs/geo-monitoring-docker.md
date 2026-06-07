@@ -87,7 +87,7 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml --profile geo-mon
 
 ## noVNC 远程维护
 
-sidecar 容器内已启动 Xvfb + noVNC，端口仅绑定 **127.0.0.1**：
+sidecar 容器内 websockify 监听 **0.0.0.0:6080**（Docker 端口映射要求）；宿主机映射仍为 **127.0.0.1:6080**，不暴露公网：
 
 | 端口 | 用途 |
 |------|------|
