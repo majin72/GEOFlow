@@ -64,30 +64,81 @@ final class GeoMonitorEvidencePathResolver
             return null;
         }
 
-        $storedPath = trim(str_replace('\\', '/', $storedPath));
+        $storedPath = $this->normalizeStoredPath($storedPath);
 
         if ($storedPath === '' || str_contains($storedPath, '..')) {
             return null;
         }
 
-        $candidatePath = $storedPath;
+        foreach ($this->candidateAbsolutePaths($storedPath, $evidenceRoot) as $candidatePath) {
+            $resolved = realpath($candidatePath);
+
+            if ($resolved === false || ! is_file($resolved)) {
+                continue;
+            }
+
+            $rootPrefix = rtrim($root, '/').'/';
+
+            if (str_starts_with($resolved.'/', $rootPrefix) || str_starts_with($resolved.'/', rtrim(dirname($root), '/').'/')) {
+                return $resolved;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 将 sidecar 返回的绝对路径转为相对证据根的路径，便于跨容器共享。
+     *
+     * @param  string  $storedPath  数据库或 sidecar 中的路径
+     */
+    public function normalizeStoredPath(string $storedPath): string
+    {
+        $storedPath = trim(str_replace('\\', '/', $storedPath));
+
+        if ($storedPath === '') {
+            return '';
+        }
 
         if (! str_starts_with($storedPath, '/')) {
-            $candidatePath = $root.'/'.ltrim($storedPath, '/');
+            return ltrim($storedPath, '/');
         }
 
-        $resolved = realpath($candidatePath);
+        $prefixes = [
+            '/app/evidence/sidecar/',
+            '/app/evidence/',
+            '/var/www/html/tools/geo-monitor-poc/evidence/sidecar/',
+            '/var/www/html/tools/geo-monitor-poc/evidence/',
+        ];
 
-        if ($resolved === false || ! is_file($resolved)) {
-            return null;
+        foreach ($prefixes as $prefix) {
+            if (str_starts_with($storedPath, $prefix)) {
+                return ltrim(substr($storedPath, strlen($prefix)), '/');
+            }
         }
 
-        $rootPrefix = rtrim($root, '/').'/';
+        return ltrim($storedPath, '/');
+    }
 
-        if (! str_starts_with($resolved.'/', $rootPrefix) && $resolved !== rtrim($root, '/')) {
-            return null;
+    /**
+     * 在证据根及其 legacy 父目录下尝试解析文件。
+     *
+     * @param  string  $relativePath  归一化后的相对路径
+     * @param  string  $evidenceRoot  配置的证据根目录
+     * @return list<string>
+     */
+    private function candidateAbsolutePaths(string $relativePath, string $evidenceRoot): array
+    {
+        $candidates = [
+            rtrim($evidenceRoot, '/').'/'.ltrim($relativePath, '/'),
+        ];
+
+        $legacyRoot = dirname(rtrim($evidenceRoot, '/'));
+
+        if ($legacyRoot !== rtrim($evidenceRoot, '/')) {
+            $candidates[] = $legacyRoot.'/'.ltrim($relativePath, '/');
         }
 
-        return $resolved;
+        return $candidates;
     }
 }

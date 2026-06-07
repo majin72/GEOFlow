@@ -10,6 +10,7 @@ use App\Models\GeoMonitorCitation;
 use App\Models\GeoMonitorMention;
 use App\Models\GeoMonitorObservation;
 use App\Models\GeoMonitorResourceAssignment;
+use App\Support\GeoFlow\GeoMonitoring\GeoMonitorEvidencePathResolver;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -19,9 +20,11 @@ class GeoMonitorProbePersister
 {
     /**
      * @param  GeoMonitorAttributionScorer|null  $scorer  引用度评分（测试可注入 null）
+     * @param  GeoMonitorEvidencePathResolver|null  $evidencePathResolver  证据路径归一化
      */
     public function __construct(
         private readonly ?GeoMonitorAttributionScorer $scorer = null,
+        private readonly ?GeoMonitorEvidencePathResolver $evidencePathResolver = null,
     ) {}
 
     /**
@@ -53,10 +56,10 @@ class GeoMonitorProbePersister
                 'answer_hash' => $answerText !== '' ? hash('sha256', $answerText) : null,
                 'error_message' => (string) ($probeResult['error_message'] ?? '') ?: null,
                 'duration_ms' => max(0, (int) ($probeResult['duration_ms'] ?? 0)),
-                'screenshot_path' => (string) ($evidence['screenshot_path'] ?? '') ?: null,
-                'html_path' => (string) ($evidence['html_path'] ?? '') ?: null,
-                'raw_text_path' => (string) ($evidence['raw_text_path'] ?? '') ?: null,
-                'markdown_path' => (string) ($evidence['markdown_path'] ?? '') ?: null,
+                'screenshot_path' => $this->normalizeEvidencePath((string) ($evidence['screenshot_path'] ?? '')),
+                'html_path' => $this->normalizeEvidencePath((string) ($evidence['html_path'] ?? '')),
+                'raw_text_path' => $this->normalizeEvidencePath((string) ($evidence['raw_text_path'] ?? '')),
+                'markdown_path' => $this->normalizeEvidencePath((string) ($evidence['markdown_path'] ?? '')),
                 'meta' => $meta,
                 'probed_at' => now(),
             ]);
@@ -340,5 +343,24 @@ class GeoMonitorProbePersister
                 'meta' => $resource !== [] ? $resource : null,
             ],
         );
+    }
+
+    /**
+     * 将 sidecar 绝对路径转为相对路径写入数据库。
+     *
+     * @param  string  $path  sidecar 返回的路径
+     */
+    private function normalizeEvidencePath(string $path): ?string
+    {
+        $path = trim($path);
+
+        if ($path === '') {
+            return null;
+        }
+
+        $resolver = $this->evidencePathResolver ?? new GeoMonitorEvidencePathResolver;
+        $normalized = $resolver->normalizeStoredPath($path);
+
+        return $normalized !== '' ? $normalized : null;
     }
 }

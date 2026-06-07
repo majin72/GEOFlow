@@ -29,7 +29,7 @@ x-geo-monitor-sidecar: &geo_monitor_sidecar
     GEO_MONITOR_NOVNC_BIND: "0.0.0.0"
     GEO_MONITOR_NOVNC_PORT: "${GEOFLOW_GEO_MONITOR_NOVNC_PORT:-6080}"
     GEO_MONITOR_PROFILE_ROOT: "/app/profiles"
-    GEO_MONITOR_EVIDENCE_ROOT: "/app/evidence"
+    GEO_MONITOR_EVIDENCE_ROOT: "/app/evidence/sidecar"
     GEO_MONITOR_ACCOUNTS_FILE: "/app/accounts.json"
     GEO_MONITOR_SIDECAR_TOKEN: "${GEOFLOW_GEO_MONITOR_SIDECAR_TOKEN:-}"
     GEO_MONITOR_SIDECAR_HOST: "0.0.0.0"

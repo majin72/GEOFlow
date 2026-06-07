@@ -56,6 +56,42 @@ class GeoMonitorEvidencePathResolverTest extends TestCase
     }
 
     /**
+     * sidecar 容器绝对路径应归一化并在 legacy 证据目录下解析。
+     */
+    public function test_resolves_sidecar_absolute_path_under_legacy_evidence_root(): void
+    {
+        $legacyRoot = sys_get_temp_dir().'/geo-evidence-legacy-'.uniqid();
+        $relativeDir = 'yuanbao/yuanbao_account_01/20260604T120000Z/laravel-run-1';
+        $fullDir = $legacyRoot.'/'.$relativeDir;
+        mkdir($fullDir, 0777, true);
+        $file = $fullDir.'/brand_generic.txt';
+        file_put_contents($file, 'answer text');
+
+        $configuredRoot = $legacyRoot.'/sidecar';
+        mkdir($configuredRoot, 0777, true);
+
+        $resolver = new GeoMonitorEvidencePathResolver;
+        $storedPath = '/app/evidence/'.$relativeDir.'/brand_generic.txt';
+
+        $this->assertSame(
+            $relativeDir.'/brand_generic.txt',
+            $resolver->normalizeStoredPath($storedPath),
+        );
+
+        $resolved = $resolver->resolveStoredPath($storedPath, $configuredRoot);
+
+        $this->assertSame(realpath($file), $resolved);
+
+        @unlink($file);
+        @rmdir($fullDir);
+        @rmdir($legacyRoot.'/yuanbao/yuanbao_account_01/20260604T120000Z');
+        @rmdir($legacyRoot.'/yuanbao/yuanbao_account_01');
+        @rmdir($legacyRoot.'/yuanbao');
+        @rmdir($configuredRoot);
+        @rmdir($legacyRoot);
+    }
+
+    /**
      * 根目录外的绝对路径应被拒绝。
      */
     public function test_rejects_absolute_path_outside_root(): void
