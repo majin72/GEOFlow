@@ -35,6 +35,25 @@ is_running() {
   kill -0 "$pid" 2>/dev/null
 }
 
+# 容器重启后清理失效 PID 与 X display 锁，避免 Xvfb「already active」循环。
+cleanup_stale_novnc_state() {
+  local display_num="${GEO_MONITOR_DISPLAY#:}"
+  local lock="/tmp/.X${display_num}-lock"
+  local socket="/tmp/.X11-unix/X${display_num}"
+  local pid_file
+
+  for pid_file in "$XVFB_PID_FILE" "$FLUXBOX_PID_FILE" "$X11VNC_PID_FILE" "$WEBSOCKIFY_PID_FILE"; do
+    if [[ -f "$pid_file" ]] && ! is_running "$pid_file"; then
+      rm -f "$pid_file"
+    fi
+  done
+
+  if [[ -f "$lock" ]] && ! is_running "$XVFB_PID_FILE"; then
+    echo "清理失效 X display 锁: $lock"
+    rm -f "$lock" "$socket"
+  fi
+}
+
 require_linux() {
   if [[ "$(uname -s)" != "Linux" ]]; then
     echo "noVNC 运维脚本仅支持 Linux 服务器（当前: $(uname -s)）。" >&2

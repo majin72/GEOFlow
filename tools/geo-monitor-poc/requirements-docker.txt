@@ -1,4 +1,3 @@
-# Docker sidecar 专用：不含 [all]  extras，避免 patchright/mcp 等大依赖。
-# 浏览器使用 apt 安装的 chromium，不执行 scrapling install。
-scrapling>=0.4.2
+# Docker sidecar：fetchers extra 含 curl_cffi + playwright（浏览器用 apt chromium，不跑 scrapling install）
+scrapling[fetchers]>=0.4.2
 Pillow>=10.0.0

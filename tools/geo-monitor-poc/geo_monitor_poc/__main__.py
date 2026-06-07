@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import sys
 
-from geo_monitor_poc.cli import ask, captcha, discover, login, probe, serve
-
 
 def main() -> int:
     """
@@ -21,16 +19,28 @@ def main() -> int:
     rest = argv[1:]
 
     if command == "login":
+        from geo_monitor_poc.cli import login
+
         return login.run_login(login.build_parser().parse_args(rest))
     if command == "captcha":
+        from geo_monitor_poc.cli import captcha
+
         return captcha.run_captcha(captcha.build_parser().parse_args(rest))
     if command == "discover":
+        from geo_monitor_poc.cli import discover
+
         return discover.run_discover(discover.build_parser().parse_args(rest))
     if command == "probe":
+        from geo_monitor_poc.cli import probe
+
         return probe.run_probe_batch(probe.build_parser().parse_args(rest))
     if command == "ask":
+        from geo_monitor_poc.cli import ask
+
         return ask.run_ask(ask.build_parser().parse_args(rest))
     if command == "serve":
+        from geo_monitor_poc.cli import serve
+
         return serve.run_serve(serve.build_parser().parse_args(rest))
 
     print(f"未知命令: {command}", file=sys.stderr)

@@ -129,7 +129,7 @@ sidecar 含 Chromium，建议：
 | 优化项 | 效果 |
 |--------|------|
 | 跳过 `scrapling install`，使用 apt `chromium` | 省去最大头 |
-| `requirements-docker.txt`（不含 `[all]` extras） | 减少 pip 依赖体积 |
+| `requirements-docker.txt`（`scrapling[fetchers]`，不含 `[all]`） | 含 curl_cffi/playwright，避免 patchright/mcp 等大包 |
 | `.dockerignore` 排除 `.venv` / `profiles` / `evidence` | 避免 build context 上传 GB 级文件 |
 | apt / pip 默认阿里云镜像 | 与主项目 Docker 策略一致 |
 | 兼容经典 `docker build`（无 BuildKit 必需项） | ECS 默认 Docker 可直接构建 |

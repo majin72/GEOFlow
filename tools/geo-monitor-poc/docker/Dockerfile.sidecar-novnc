@@ -40,14 +40,16 @@ ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
 ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}
 
-RUN pip install -r requirements-docker.txt
+RUN pip install -r requirements-docker.txt \
+    && python -c "import curl_cffi; from scrapling.fetchers import DynamicSession"
 
 COPY geo_monitor_poc ./geo_monitor_poc
 COPY scripts ./scripts
 COPY run.sh ./
 
-RUN chmod +x scripts/novnc/*.sh run.sh 2>/dev/null || chmod +x scripts/novnc/*.sh
+RUN chmod +x scripts/novnc/*.sh scripts/docker/entrypoint-sidecar.sh run.sh 2>/dev/null \
+    || chmod +x scripts/novnc/*.sh scripts/docker/entrypoint-sidecar.sh
 
 EXPOSE 6080 8765
 
-CMD ["sh", "-c", "./scripts/novnc/start-novnc.sh && python -m geo_monitor_poc serve --host 0.0.0.0 --port 8765"]
+CMD ["./scripts/docker/entrypoint-sidecar.sh"]

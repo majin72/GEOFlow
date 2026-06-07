@@ -7,6 +7,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 require_linux
 require_commands
+cleanup_stale_novnc_state
 
 export DISPLAY="$GEO_MONITOR_DISPLAY"
 
