@@ -1,6 +1,6 @@
-# syntax=docker/dockerfile:1.7
 # GEO Monitor sidecar + noVNC（Debian bookworm slim）。
 # 使用系统 Chromium + PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD，跳过 scrapling install（通常可节省 30–60+ 分钟）。
+# 不使用 RUN --mount（兼容未启用 BuildKit 的 ECS 经典构建器）。
 FROM python:3.12-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -24,9 +24,7 @@ RUN set -eux; \
             "$f"; \
     done
 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get -o Acquire::Retries=3 update && apt-get install -y --no-install-recommends \
+RUN apt-get -o Acquire::Retries=3 update && apt-get install -y --no-install-recommends \
     xvfb fluxbox x11vnc novnc websockify \
     chromium \
     fonts-noto-cjk fonts-liberation \
@@ -42,8 +40,7 @@ ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
 ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements-docker.txt
+RUN pip install -r requirements-docker.txt
 
 COPY geo_monitor_poc ./geo_monitor_poc
 COPY scripts ./scripts

@@ -131,15 +131,13 @@ sidecar 含 Chromium，建议：
 | 跳过 `scrapling install`，使用 apt `chromium` | 省去最大头 |
 | `requirements-docker.txt`（不含 `[all]` extras） | 减少 pip 依赖体积 |
 | `.dockerignore` 排除 `.venv` / `profiles` / `evidence` | 避免 build context 上传 GB 级文件 |
-| BuildKit pip/apt 缓存 | 二次构建更快 |
 | apt / pip 默认阿里云镜像 | 与主项目 Docker 策略一致 |
+| 兼容经典 `docker build`（无 BuildKit 必需项） | ECS 默认 Docker 可直接构建 |
 | `python:3.12-slim-bookworm` 基础镜像 | 更小、拉取更快 |
 
 **推荐构建命令**（先单独构建 sidecar，不要和 PHP 镜像一起 `--build`）：
 
 ```bash
-export DOCKER_BUILDKIT=1
-
 # 仅构建 sidecar（首次约 5–15 分钟，视网络而定）
 docker compose --env-file .env.prod -f docker-compose.prod.yml \
   --profile geo-monitor build geo-monitor-sidecar
@@ -147,6 +145,12 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml \
 # 再启动全栈（已构建的可跳过 --build）
 docker compose --env-file .env.prod -f docker-compose.prod.yml \
   --profile geo-monitor up -d
+```
+
+若报错 `the --mount option requires BuildKit`，说明使用了旧版 Dockerfile；`git pull` 后重新 build 即可。可选启用 BuildKit 加速二次构建：
+
+```bash
+export DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 ```
 
 国内服务器默认已使用阿里云 apt + pip，一般无需再改。海外构建若需官方源，在 `.env.prod` 中覆盖：
