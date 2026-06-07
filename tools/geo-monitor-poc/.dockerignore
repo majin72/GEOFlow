@@ -1,0 +1,17 @@
+# 本地运行产物（避免 build context 膨胀导致上传极慢）
+.venv/
+profiles/
+evidence/
+accounts.json
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+*.md
+!README.md
+docker-data/
+
+# 测试与样例（镜像内不需要）
+tests/
+accounts.sample.json
+prompts.sample.json

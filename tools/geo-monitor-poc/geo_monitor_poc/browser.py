@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -20,6 +21,23 @@ def build_proxy_config(proxy: str) -> str | dict[str, str] | None:
         return None
 
     return cleaned
+
+
+def chromium_session_kwargs() -> dict[str, Any]:
+    """
+    Docker/生产侧car 可通过 GEO_MONITOR_CHROMIUM_EXECUTABLE 使用 apt Chromium，
+    避免 scrapling install 下载 Playwright 浏览器包。
+
+    @return 传给 DynamicSession 的浏览器参数
+    """
+    executable = os.environ.get("GEO_MONITOR_CHROMIUM_EXECUTABLE", "").strip()
+    if executable == "":
+        return {"real_chrome": False}
+
+    return {
+        "real_chrome": True,
+        "executable_path": executable,
+    }
 
 
 def open_platform_session(
@@ -50,7 +68,7 @@ def open_platform_session(
         timezone_id=account.timezone_id,
         user_data_dir=str(profile_dir),
         proxy=proxy,
-        real_chrome=False,
+        **chromium_session_kwargs(),
     )
 
 

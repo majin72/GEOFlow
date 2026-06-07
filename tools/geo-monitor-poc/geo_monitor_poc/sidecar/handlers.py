@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
@@ -101,13 +102,19 @@ def handle_health() -> tuple[int, dict[str, Any]]:
     browser_ok = True
     browser_note = "ok"
     try:
-        from playwright.sync_api import sync_playwright  # noqa: PLC0415
-
-        with sync_playwright() as playwright:
-            executable = playwright.chromium.executable_path
+        executable = os.environ.get("GEO_MONITOR_CHROMIUM_EXECUTABLE", "").strip()
+        if executable != "":
             if not Path(executable).exists():
                 browser_ok = False
-                browser_note = "chromium executable missing"
+                browser_note = f"chromium executable missing: {executable}"
+        else:
+            from playwright.sync_api import sync_playwright  # noqa: PLC0415
+
+            with sync_playwright() as playwright:
+                bundled = playwright.chromium.executable_path
+                if not Path(bundled).exists():
+                    browser_ok = False
+                    browser_note = "chromium executable missing"
     except Exception as exc:  # noqa: BLE001
         browser_ok = False
         browser_note = str(exc)

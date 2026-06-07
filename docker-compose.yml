@@ -19,6 +19,9 @@ x-geo-monitor-sidecar: &geo_monitor_sidecar
   build:
     context: ./tools/geo-monitor-poc
     dockerfile: docker/Dockerfile.sidecar-novnc
+    args:
+      PIP_INDEX_URL: ${GEO_MONITOR_PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+      PIP_TRUSTED_HOST: ${GEO_MONITOR_PIP_TRUSTED_HOST:-mirrors.aliyun.com}
   environment:
     DISPLAY: ":99"
     GEO_MONITOR_DISPLAY: ":99"
