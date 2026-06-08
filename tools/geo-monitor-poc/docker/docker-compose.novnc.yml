@@ -1,16 +1,17 @@
-# 已合并至仓库根目录 docker-compose.yml / docker-compose.prod.yml（profile: geo-monitor）。
-# 本文件保留作 sidecar 单独调试参考；推荐使用主 compose：
+# 已合并至仓库根目录 docker-compose.yml / docker-compose.prod.yml（主 compose 仍用 profile: geo-monitor）。
+# 本文件仅 sidecar 单独调试：只有这一个服务，无需 --profile。
 #
+#   cd tools/geo-monitor-poc/docker
+#   docker compose -f docker-compose.novnc.yml up -d --build
+#
+# 生产/完整栈请用主 compose：
 #   docker compose --profile geo-monitor up -d geo-monitor-sidecar
-#   docker compose --env-file .env.prod -f docker-compose.prod.yml --profile geo-monitor up -d geo-monitor-sidecar
 #
 # SSH 隧道（维护 noVNC）:
 #   ssh -L 6080:127.0.0.1:6080 -L 8765:127.0.0.1:8765 user@server
 
 services:
   geo-monitor-sidecar:
-    profiles:
-      - geo-monitor
     image: geoflow/geo-monitor-sidecar:latest
     build:
       context: ..
