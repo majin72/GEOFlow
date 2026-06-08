@@ -13,6 +13,10 @@
             <div class="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">{{ session('message') }}</div>
         @endif
 
+        @if ($errors->any())
+            <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{{ $errors->first() }}</div>
+        @endif
+
         <div class="rounded-lg bg-white shadow overflow-x-auto">
             @if ($proxies->isEmpty())
                 <div class="px-6 py-10 text-center text-sm text-gray-500">{{ __('admin.geo_monitoring.empty_proxies') }}</div>
@@ -47,6 +51,10 @@
                                     <form method="post" action="{{ route('admin.geo-monitoring.proxies.toggle', ['proxyId' => $proxy->id]) }}" class="inline">
                                         @csrf
                                         <button type="submit" class="text-amber-600 hover:text-amber-800">{{ __('admin.geo_monitoring.button_toggle') }}</button>
+                                    </form>
+                                    <form method="post" action="{{ route('admin.geo-monitoring.proxies.delete', ['proxyId' => $proxy->id]) }}" class="inline" onsubmit="return confirm(@js(__('admin.geo_monitoring.confirm_delete_proxy', ['name' => $proxy->label])));">
+                                        @csrf
+                                        <button type="submit" class="text-red-600 hover:text-red-800">{{ __('admin.geo_monitoring.button_delete') }}</button>
                                     </form>
                                 </td>
                             </tr>

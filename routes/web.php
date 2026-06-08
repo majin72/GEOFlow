@@ -121,6 +121,7 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
             Route::get('accounts/{accountId}/edit', [GeoMonitoringAccountController::class, 'edit'])->name('accounts.edit');
             Route::put('accounts/{accountId}', [GeoMonitoringAccountController::class, 'update'])->name('accounts.update');
             Route::post('accounts/{accountId}/toggle', [GeoMonitoringAccountController::class, 'toggle'])->name('accounts.toggle');
+            Route::post('accounts/{accountId}/delete', [GeoMonitoringAccountController::class, 'destroy'])->name('accounts.delete');
             Route::post('accounts/sync-sidecar', [GeoMonitoringAccountController::class, 'syncSidecarAccounts'])->name('accounts.sync-sidecar');
             Route::post('accounts/clear-stale-locks', [GeoMonitoringAccountController::class, 'clearStaleLocks'])->name('accounts.clear-stale-locks');
             Route::get('accounts/{accountId}/maintenance', [GeoMonitoringMaintenanceController::class, 'show'])->name('accounts.maintenance');
@@ -136,12 +137,14 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
             Route::get('proxies/{proxyId}/edit', [GeoMonitoringProxyController::class, 'edit'])->name('proxies.edit');
             Route::put('proxies/{proxyId}', [GeoMonitoringProxyController::class, 'update'])->name('proxies.update');
             Route::post('proxies/{proxyId}/toggle', [GeoMonitoringProxyController::class, 'toggle'])->name('proxies.toggle');
+            Route::post('proxies/{proxyId}/delete', [GeoMonitoringProxyController::class, 'destroy'])->name('proxies.delete');
 
             Route::get('profiles', [GeoMonitoringBrowserProfileController::class, 'index'])->name('profiles.index');
             Route::get('profiles/create', [GeoMonitoringBrowserProfileController::class, 'create'])->name('profiles.create');
             Route::post('profiles', [GeoMonitoringBrowserProfileController::class, 'store'])->name('profiles.store');
             Route::get('profiles/{profileId}/edit', [GeoMonitoringBrowserProfileController::class, 'edit'])->name('profiles.edit');
             Route::put('profiles/{profileId}', [GeoMonitoringBrowserProfileController::class, 'update'])->name('profiles.update');
+            Route::post('profiles/{profileId}/delete', [GeoMonitoringBrowserProfileController::class, 'destroy'])->name('profiles.delete');
 
             Route::get('runs/{runId}', [GeoMonitoringController::class, 'showRun'])->name('run');
             Route::get('runs/{runId}/export', [GeoMonitoringExportController::class, 'run'])->name('runs.export');

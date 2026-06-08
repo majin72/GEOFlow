@@ -7,6 +7,8 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\GeoMonitorAccount;
 use App\Models\GeoMonitorBrowserProfile;
+use App\Models\GeoMonitorObservation;
+use App\Models\GeoMonitorProfileMaintenanceEvent;
 use App\Support\AdminWeb;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\RedirectResponse;
@@ -124,6 +126,38 @@ class GeoMonitoringBrowserProfileController extends Controller
     }
 
     /**
+     * 删除浏览器 Profile（账号保留，可稍后重新创建 Profile）。
+     */
+    public function destroy(int $profileId): RedirectResponse
+    {
+        $profile = GeoMonitorBrowserProfile::query()->find($profileId);
+
+        if ($profile === null) {
+            return redirect()
+                ->route('admin.geo-monitoring.profiles.index')
+                ->withErrors(__('admin.geo_monitoring.message.profile_not_found'));
+        }
+
+        if ($this->profileAccountHasActiveObservations($profile->account_id)) {
+            return redirect()
+                ->route('admin.geo-monitoring.profiles.index')
+                ->withErrors(__('admin.geo_monitoring.error.profile_delete_active_observations'));
+        }
+
+        if ($this->profileHasOpenMaintenance($profile->id)) {
+            return redirect()
+                ->route('admin.geo-monitoring.profiles.index')
+                ->withErrors(__('admin.geo_monitoring.error.profile_delete_maintenance_in_progress'));
+        }
+
+        $profile->delete();
+
+        return redirect()
+            ->route('admin.geo-monitoring.profiles.index')
+            ->with('message', __('admin.geo_monitoring.message.profile_deleted'));
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function emptyProfileForm(): array
@@ -211,5 +245,31 @@ class GeoMonitoringBrowserProfileController extends Controller
             ->when($boundIds->isNotEmpty(), fn ($q) => $q->whereNotIn('id', $boundIds))
             ->orderBy('external_id')
             ->get();
+    }
+
+    /**
+     * 绑定账号是否仍有排队或执行中的观测任务。
+     *
+     * @param  int  $accountId  账号主键
+     */
+    private function profileAccountHasActiveObservations(int $accountId): bool
+    {
+        return GeoMonitorObservation::query()
+            ->where('account_id', $accountId)
+            ->whereIn('status', ['pending', 'running'])
+            ->exists();
+    }
+
+    /**
+     * Profile 是否仍有进行中的维护会话。
+     *
+     * @param  int  $profileId  Profile 主键
+     */
+    private function profileHasOpenMaintenance(int $profileId): bool
+    {
+        return GeoMonitorProfileMaintenanceEvent::query()
+            ->where('browser_profile_id', $profileId)
+            ->where('status', 'in_progress')
+            ->exists();
     }
 }

@@ -105,6 +105,32 @@ class GeoMonitoringProxyController extends Controller
     }
 
     /**
+     * 删除代理出口（需先解除所有账号绑定）。
+     */
+    public function destroy(int $proxyId): RedirectResponse
+    {
+        $proxy = GeoMonitorProxyEndpoint::query()->withCount('accounts')->find($proxyId);
+
+        if ($proxy === null) {
+            return redirect()
+                ->route('admin.geo-monitoring.proxies.index')
+                ->withErrors(__('admin.geo_monitoring.message.proxy_not_found'));
+        }
+
+        if ($proxy->accounts_count > 0) {
+            return redirect()
+                ->route('admin.geo-monitoring.proxies.index')
+                ->withErrors(__('admin.geo_monitoring.error.proxy_delete_has_accounts', ['count' => $proxy->accounts_count]));
+        }
+
+        $proxy->delete();
+
+        return redirect()
+            ->route('admin.geo-monitoring.proxies.index')
+            ->with('message', __('admin.geo_monitoring.message.proxy_deleted'));
+    }
+
+    /**
      * 切换代理启停。
      */
     public function toggle(int $proxyId): RedirectResponse

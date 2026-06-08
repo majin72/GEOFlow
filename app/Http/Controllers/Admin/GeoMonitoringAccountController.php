@@ -7,7 +7,9 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\GeoMonitorAccount;
 use App\Models\GeoMonitorBrowserProfile;
+use App\Models\GeoMonitorObservation;
 use App\Models\GeoMonitorPlatform;
+use App\Models\GeoMonitorProfileMaintenanceEvent;
 use App\Models\GeoMonitorProxyEndpoint;
 use App\Services\GeoFlow\GeoMonitoring\GeoMonitorMaintenanceService;
 use App\Services\GeoFlow\GeoMonitoring\GeoMonitorResourceScheduler;
@@ -196,6 +198,39 @@ class GeoMonitoringAccountController extends Controller
         return redirect()
             ->route('admin.geo-monitoring.accounts.index')
             ->with('message', __('admin.geo_monitoring.message.accounts_synced', ['path' => $path]));
+    }
+
+    /**
+     * 删除平台账号（无进行中观测与维护时可删，级联移除 Profile）。
+     */
+    public function destroy(int $accountId, GeoMonitorResourceScheduler $scheduler): RedirectResponse
+    {
+        $account = GeoMonitorAccount::query()->find($accountId);
+
+        if ($account === null) {
+            return redirect()
+                ->route('admin.geo-monitoring.accounts.index')
+                ->withErrors(__('admin.geo_monitoring.message.account_not_found'));
+        }
+
+        if ($this->accountHasActiveObservations($account->id)) {
+            return redirect()
+                ->route('admin.geo-monitoring.accounts.index')
+                ->withErrors(__('admin.geo_monitoring.error.account_delete_active_observations'));
+        }
+
+        if ($this->accountHasOpenMaintenance($account->id)) {
+            return redirect()
+                ->route('admin.geo-monitoring.accounts.index')
+                ->withErrors(__('admin.geo_monitoring.error.account_delete_maintenance_in_progress'));
+        }
+
+        $scheduler->releaseAccountLock($account);
+        $account->delete();
+
+        return redirect()
+            ->route('admin.geo-monitoring.accounts.index')
+            ->with('message', __('admin.geo_monitoring.message.account_deleted'));
     }
 
     /**
@@ -408,5 +443,31 @@ class GeoMonitoringAccountController extends Controller
     private function proxyOptions()
     {
         return GeoMonitorProxyEndpoint::query()->orderBy('label')->get();
+    }
+
+    /**
+     * 账号是否仍有排队或执行中的观测任务。
+     *
+     * @param  int  $accountId  账号主键
+     */
+    private function accountHasActiveObservations(int $accountId): bool
+    {
+        return GeoMonitorObservation::query()
+            ->where('account_id', $accountId)
+            ->whereIn('status', ['pending', 'running'])
+            ->exists();
+    }
+
+    /**
+     * 账号是否仍有进行中的维护会话。
+     *
+     * @param  int  $accountId  账号主键
+     */
+    private function accountHasOpenMaintenance(int $accountId): bool
+    {
+        return GeoMonitorProfileMaintenanceEvent::query()
+            ->where('account_id', $accountId)
+            ->where('status', 'in_progress')
+            ->exists();
     }
 }
