@@ -57,10 +57,29 @@ ssh -L 6080:127.0.0.1:6080 -L 8765:127.0.0.1:8765 deploy@your-server
 
 8. 后台点击 **Sidecar 登录态检查** 或 **完成维护**（勾选健康通过）→ 账号恢复 `active`
 
+## 公网访问（无需 SSH 隧道）
+
+在 `.env.prod` 启用后，维护页直接给出站点链接，管理者用浏览器打开即可（须 HTTPS）：
+
+```env
+GEOFLOW_GEO_MONITOR_NOVNC_PUBLIC_ENABLED=true
+GEOFLOW_GEO_MONITOR_NOVNC_AUTH_MODE=admin_session
+# 或 basic / both（专用账号密码，见 .env.prod.example）
+```
+
+| `auth_mode` | 说明 |
+|-------------|------|
+| `admin_session` | 须已登录 GEOFlow 后台（推荐） |
+| `basic` | 仅 HTTP 专用账号密码 |
+| `both` | 后台已登录或专用账号密码（二选一） |
+
+访问地址示例：`https://你的域名/geo-monitor/novnc/vnc.html`。修改后需重建 `web` 容器。
+
 ## 安全基线
 
-- `GEOFLOW_GEO_MONITOR_NOVNC_BIND=127.0.0.1`（默认），**禁止**把 6080/5900 裸露公网
-- 通过 SSH 隧道、VPN 或堡垒机访问 noVNC
+- 默认 `GEOFLOW_GEO_MONITOR_NOVNC_PUBLIC_ENABLED=false`；6080 仍仅 `127.0.0.1` + SSH 隧道
+- 公网模式也不要把 sidecar 6080 直接映射到 `0.0.0.0`，只走 Nginx 反代路径
+- 未启用公网时：通过 SSH 隧道、VPN 或堡垒机访问 noVNC
 - 可选 VNC 密码：`x11vnc -storepasswd` 生成后设置 `GEO_MONITOR_VNC_PASSWORD_FILE`
 - 维护日志不记录 Cookie、密码、验证码内容
 

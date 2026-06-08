@@ -27,6 +27,7 @@ use App\Http\Controllers\Admin\GeoMonitoringController;
 use App\Http\Controllers\Admin\GeoMonitoringDashboardController;
 use App\Http\Controllers\Admin\GeoMonitoringExportController;
 use App\Http\Controllers\Admin\GeoMonitoringMaintenanceController;
+use App\Http\Controllers\Admin\GeoMonitoringNovncAuthController;
 use App\Http\Controllers\Admin\GeoMonitoringProjectController;
 use App\Http\Controllers\Admin\GeoMonitoringProxyController;
 use App\Http\Controllers\Admin\GeoMonitoringRunOpsController;
@@ -82,6 +83,10 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
         Route::get('login', [AdminAuthController::class, 'showLoginForm'])->name('login');
         Route::post('login', [AdminAuthController::class, 'login'])->name('login.attempt');
     });
+
+    // Nginx auth_request：校验后台会话，不经过 admin.auth 中间件（子请求无 CSRF）
+    Route::get('internal/geo-monitor/novnc-auth', GeoMonitoringNovncAuthController::class)
+        ->name('internal.geo-monitoring.novnc-auth');
 
     // 后台受保护路由
     Route::middleware(['admin.auth', 'admin.activity'])->group(function () {

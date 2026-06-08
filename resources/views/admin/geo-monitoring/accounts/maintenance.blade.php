@@ -42,17 +42,38 @@
                     <div class="rounded-lg border-2 border-blue-200 bg-gradient-to-br from-blue-50 to-white p-6 shadow-sm">
                         @php($isNovncInteractive = ($guide['runtime_mode'] ?? '') === 'headless_linux')
                         <h2 class="text-lg font-semibold text-gray-900">
-                            {{ $isNovncInteractive
-                                ? __('admin.geo_monitoring.maintenance_interactive_title_novnc')
-                                : __('admin.geo_monitoring.maintenance_interactive_title') }}
+                            @if ($isNovncInteractive && ! empty($guide['novnc_public_enabled']))
+                                {{ __('admin.geo_monitoring.maintenance_interactive_title_novnc_public') }}
+                            @elseif ($isNovncInteractive)
+                                {{ __('admin.geo_monitoring.maintenance_interactive_title_novnc') }}
+                            @else
+                                {{ __('admin.geo_monitoring.maintenance_interactive_title') }}
+                            @endif
                         </h2>
                         <p class="mt-2 text-sm text-gray-600">
-                            {{ $isNovncInteractive
-                                ? __('admin.geo_monitoring.maintenance_interactive_desc_novnc')
-                                : __('admin.geo_monitoring.maintenance_interactive_desc') }}
+                            @if ($isNovncInteractive && ! empty($guide['novnc_public_enabled']))
+                                {{ __('admin.geo_monitoring.maintenance_interactive_desc_novnc_public') }}
+                            @elseif ($isNovncInteractive)
+                                {{ __('admin.geo_monitoring.maintenance_interactive_desc_novnc') }}
+                            @else
+                                {{ __('admin.geo_monitoring.maintenance_interactive_desc') }}
+                            @endif
                         </p>
 
-                        @if ($isNovncInteractive && ! empty($guide['ssh_tunnel_command']))
+                        @if ($isNovncInteractive && ! empty($guide['novnc_public_enabled']))
+                            <div class="mt-4 space-y-3 rounded-md border border-blue-200 bg-white p-4">
+                                <div>
+                                    <div class="text-sm font-medium text-gray-800">{{ __('admin.geo_monitoring.maintenance_novnc_public_url') }}</div>
+                                    <a href="{{ $guide['novnc_public_url'] ?? '#' }}" target="_blank" rel="noopener noreferrer" class="mt-1 inline-block break-all font-mono text-sm text-blue-700 underline hover:text-blue-900">
+                                        {{ $guide['novnc_public_url'] ?? '' }}
+                                    </a>
+                                    <p class="mt-2 text-xs text-gray-500">
+                                        {{ __('admin.geo_monitoring.maintenance_novnc_public_auth', ['mode' => $guide['novnc_auth_mode_label'] ?? '']) }}
+                                    </p>
+                                    <p class="mt-1 text-xs text-amber-700">{{ __('admin.geo_monitoring.maintenance_novnc_public_https_hint') }}</p>
+                                </div>
+                            </div>
+                        @elseif ($isNovncInteractive && ! empty($guide['ssh_tunnel_command']))
                             <div class="mt-4 space-y-3 rounded-md border border-blue-200 bg-white p-4">
                                 <div>
                                     <div class="text-sm font-medium text-gray-800">{{ __('admin.geo_monitoring.maintenance_ssh_tunnel_label') }}</div>

@@ -5,7 +5,7 @@ from typing import Any
 
 from geo_monitor_poc.adapters.base import PlatformAdapter
 from geo_monitor_poc.config import DEFAULT_ANSWER_WAIT_MS, DEFAULT_POST_ANSWER_WAIT_MS
-from geo_monitor_poc.models import PlatformId
+from geo_monitor_poc.models import LoginStatus, PlatformId, ProbeResult, ProbeStatus
 
 
 class YuanbaoAdapter(PlatformAdapter):
@@ -14,6 +14,19 @@ class YuanbaoAdapter(PlatformAdapter):
     platform = PlatformId.YUANBAO
 
     MIN_ANSWER_CHARS = 80
+    LOGIN_WALL_MARKERS = (
+        "text=未登录",
+        "text=请使用微信扫描二维码登录",
+        "text=扫码默认已阅读并同意",
+        "text=微信登录",
+    )
+    GUEST_LANDING_ANSWER_MARKERS = (
+        "未登录",
+        "请使用微信扫描二维码登录",
+        "你身边的智能助手",
+        "你可以这样问",
+        "扫码默认已阅读并同意",
+    )
 
     def prepare_page(self, page: Any) -> None:
         """
@@ -181,6 +194,90 @@ class YuanbaoAdapter(PlatformAdapter):
             )
         except Exception:  # noqa: BLE001
             return False
+
+    def detect_login_status(self, page: Any) -> LoginStatus:
+        """
+        检测元宝登录态；访客首页也有输入框，不能仅凭输入区判断已登录。
+
+        @param page Playwright Page
+        @return 登录态枚举
+        """
+        if self.has_captcha(page):
+            return LoginStatus.CAPTCHA
+
+        if self._has_visible_login_wall(page):
+            return LoginStatus.NOT_LOGGED_IN
+
+        if not self.has_input_ready(page):
+            return LoginStatus.NOT_LOGGED_IN
+
+        return LoginStatus.LOGGED_IN
+
+    def _has_visible_login_wall(self, page: Any) -> bool:
+        """
+        判断页面是否展示登录墙/扫码登录层。
+
+        @param page Playwright Page
+        @return 是否存在可见登录墙
+        """
+        for marker in self.LOGIN_WALL_MARKERS:
+            locator = page.locator(marker)
+            count = min(locator.count(), 3)
+            for index in range(count):
+                candidate = locator.nth(index)
+                try:
+                    if candidate.is_visible():
+                        return True
+                except Exception:  # noqa: BLE001
+                    continue
+
+        return False
+
+    def is_guest_landing_answer(self, answer_text: str) -> bool:
+        """
+        判断抽取文本是否为未登录首页/登录引导，而非真实 AI 回答。
+
+        @param answer_text 页面抽取文本
+        @return 是否为访客落地页文案
+        """
+        normalized = answer_text.strip()
+        if normalized == "":
+            return False
+
+        hits = sum(1 for marker in self.GUEST_LANDING_ANSWER_MARKERS if marker in normalized)
+        if hits >= 2:
+            return True
+
+        return "未登录" in normalized and "微信登录" in normalized
+
+    def build_probe_result(self, **kwargs: Any) -> ProbeResult:
+        """
+        构造探测结果；若回答实为未登录首页文案则降级为 needs_login。
+
+        @param kwargs 与基类 build_probe_result 相同
+        @return 探测结果
+        """
+        result = super().build_probe_result(**kwargs)
+        if result.status in {ProbeStatus.NEEDS_LOGIN, ProbeStatus.CAPTCHA}:
+            return result
+
+        if not self.is_guest_landing_answer(result.answer_text):
+            return result
+
+        return ProbeResult(
+            platform=result.platform,
+            account_id=result.account_id,
+            prompt_id=result.prompt_id,
+            prompt_text=result.prompt_text,
+            status=ProbeStatus.NEEDS_LOGIN,
+            login_status=LoginStatus.NOT_LOGGED_IN,
+            answer_text=result.answer_text,
+            citations=[],
+            evidence=result.evidence,
+            error_message="检测到未登录首页/登录引导，请先执行 login 或维护 profile",
+            duration_ms=result.duration_ms,
+            meta=result.meta,
+        )
 
     def is_answer_loading(self, page: Any) -> bool:
         """

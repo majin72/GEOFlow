@@ -128,7 +128,7 @@ PLATFORM_SELECTORS: dict[PlatformId, PlatformSelectors] = {
         onboarding_dismiss_selectors=[],
     ),
     PlatformId.YUANBAO: PlatformSelectors(
-        selector_version="2026-06-03-poc-v4-yuanbao-online",
+        selector_version="2026-06-04-poc-v5-yuanbao-login-wall",
         chat_url="https://yuanbao.tencent.com/chat",
         input_selectors=[
             ".chat-input-editor [contenteditable='true']",
@@ -164,13 +164,13 @@ PLATFORM_SELECTORS: dict[PlatformId, PlatformSelectors] = {
             "#search-guide-tool",
         ],
         logged_in_markers=[
-            ".chat-input-editor",
-            "textarea",
-            "[contenteditable='true']",
-            "[role='textbox']",
+            ".yb-user-avatar",
+            "[class*='user-avatar']",
+            "[class*='UserAvatar']",
         ],
         login_markers=[
-            "text=登录",
+            "text=未登录",
+            "text=请使用微信扫描二维码登录",
             "text=微信登录",
             "text=QQ登录",
         ],

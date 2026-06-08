@@ -209,6 +209,13 @@ return [
             'port' => max(1024, (int) env('GEOFLOW_GEO_MONITOR_NOVNC_PORT', 6080)),
             'display' => (string) env('GEOFLOW_GEO_MONITOR_DISPLAY', ':99'),
             'ssh_tunnel_hint_host' => (string) env('GEOFLOW_GEO_MONITOR_SSH_HOST', ''),
+            // 公网暴露：经 Nginx 反代 /geo-monitor/novnc/，不再要求 SSH 隧道（须 HTTPS + 鉴权）
+            'public_enabled' => filter_var(env('GEOFLOW_GEO_MONITOR_NOVNC_PUBLIC_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+            'public_path' => (string) env('GEOFLOW_GEO_MONITOR_NOVNC_PUBLIC_PATH', '/geo-monitor/novnc'),
+            'auth_mode' => (string) env('GEOFLOW_GEO_MONITOR_NOVNC_AUTH_MODE', 'admin_session'),
+            'basic_username' => (string) env('GEOFLOW_GEO_MONITOR_NOVNC_BASIC_USER', ''),
+            'basic_password' => (string) env('GEOFLOW_GEO_MONITOR_NOVNC_BASIC_PASSWORD', ''),
+            'upstream_host' => (string) env('GEOFLOW_GEO_MONITOR_NOVNC_UPSTREAM', 'geo-monitor-sidecar:6080'),
         ],
     ],
 

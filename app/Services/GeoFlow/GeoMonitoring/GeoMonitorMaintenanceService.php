@@ -98,15 +98,23 @@ class GeoMonitorMaintenanceService
 
         if ($this->supportsInteractiveBrowser()) {
             if ($this->runtime->isHeadlessLinux()) {
-                /** @var array<string, mixed> $novnc */
-                $novnc = config('geoflow.geo_monitor.novnc', []);
-                $port = max(1024, (int) ($novnc['port'] ?? 6080));
-                $sshHost = trim((string) ($novnc['ssh_tunnel_hint_host'] ?? ''));
+                $novncConfig = GeoMonitorNovncConfig::fromConfig();
+                $context['novnc_public_enabled'] = $novncConfig->publicEnabled;
 
-                $context['novnc_local_url'] = sprintf('http://127.0.0.1:%d/vnc.html', $port);
-                $context['ssh_tunnel_command'] = $sshHost !== ''
-                    ? sprintf('ssh -N -L %d:127.0.0.1:%d %s', $port, $port, $sshHost)
-                    : sprintf('ssh -N -L %d:127.0.0.1:%d user@your-server', $port, $port);
+                if ($novncConfig->publicEnabled) {
+                    $context['novnc_public_url'] = $novncConfig->publicVncUrl();
+                    $context['novnc_auth_mode_label'] = __($novncConfig->authModeLabelKey());
+                } else {
+                    /** @var array<string, mixed> $novnc */
+                    $novnc = config('geoflow.geo_monitor.novnc', []);
+                    $port = max(1024, (int) ($novnc['port'] ?? 6080));
+                    $sshHost = trim((string) ($novnc['ssh_tunnel_hint_host'] ?? ''));
+
+                    $context['novnc_local_url'] = sprintf('http://127.0.0.1:%d/vnc.html', $port);
+                    $context['ssh_tunnel_command'] = $sshHost !== ''
+                        ? sprintf('ssh -N -L %d:127.0.0.1:%d %s', $port, $port, $sshHost)
+                        : sprintf('ssh -N -L %d:127.0.0.1:%d user@your-server', $port, $port);
+                }
             }
         } elseif ($this->runtime->isHeadlessLinux()) {
             /** @var array<string, mixed> $novnc */
@@ -204,6 +212,16 @@ class GeoMonitorMaintenanceService
     {
         if ($this->supportsInteractiveBrowser()) {
             if ($this->runtime->isHeadlessLinux()) {
+                if (GeoMonitorNovncConfig::fromConfig()->publicEnabled) {
+                    return [
+                        __('admin.geo_monitoring.maintenance_step_interactive_public_login'),
+                        __('admin.geo_monitoring.maintenance_step_interactive_launch'),
+                        __('admin.geo_monitoring.maintenance_step_interactive_public_novnc'),
+                        __('admin.geo_monitoring.maintenance_step_interactive_save'),
+                        __('admin.geo_monitoring.maintenance_step_health'),
+                    ];
+                }
+
                 return [
                     __('admin.geo_monitoring.maintenance_step_interactive_novnc_tunnel'),
                     __('admin.geo_monitoring.maintenance_step_interactive_launch'),
