@@ -142,7 +142,7 @@ class GeoMonitorMaintenanceTest extends TestCase
             ->post(route('admin.geo-monitoring.accounts.maintenance.launch-browser', ['accountId' => $account->id]))
             ->assertRedirect(route('admin.geo-monitoring.accounts.maintenance', ['accountId' => $account->id]))
             ->assertSessionHas('geo_monitor_maintenance_session')
-            ->assertSessionHas('geo_monitor_open_novnc_url', 'https://geo.example.com/geo-monitor/novnc/vnc.html');
+            ->assertSessionHas('geo_monitor_open_novnc_url', 'https://geo.example.com/geo-monitor/novnc/vnc.html?path=geo-monitor%2Fnovnc%2Fwebsockify&autoconnect=true&resize=scale&encrypt=1');
     }
 
     /**

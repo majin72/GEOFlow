@@ -218,7 +218,7 @@ class GeoMonitorMaintenanceService
             return null;
         }
 
-        return $config->publicVncSimpleUrl();
+        return $config->publicVncUrl();
     }
 
     /**

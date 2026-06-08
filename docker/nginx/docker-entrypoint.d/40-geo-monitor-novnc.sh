@@ -10,7 +10,8 @@ PUBLIC_PATH="/${PUBLIC_PATH#/}"
 PUBLIC_PATH="${PUBLIC_PATH%/}"
 AUTH_LOCATION="$(dirname "$PUBLIC_PATH")/novnc-auth"
 WS_PATH="${PUBLIC_PATH#/}/websockify"
-VNC_QUERY="path=${WS_PATH}&autoconnect=true&resize=scale"
+WS_PATH_ENCODED=$(printf '%s' "$WS_PATH" | sed 's|/|%2F|g')
+VNC_QUERY="path=${WS_PATH_ENCODED}&autoconnect=true&resize=scale"
 
 mkdir -p /etc/nginx/snippets
 rm -f "$LEGACY_CONF"
@@ -69,6 +70,20 @@ append_proxy_directives() {
   echo "    proxy_buffering off;"
 }
 
+append_vnc_html_proxy_directives() {
+  # 精确匹配 location 不能用 proxy_pass http://upstream/; 否则 upstream 收到 GET / 导致目录列表
+  echo "    proxy_pass http://${UPSTREAM}/vnc.html\$is_args\$args;"
+  echo "    proxy_http_version 1.1;"
+  echo "    proxy_set_header Upgrade \$http_upgrade;"
+  echo "    proxy_set_header Connection \$connection_upgrade;"
+  echo "    proxy_set_header Host \$host;"
+  echo "    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;"
+  echo "    proxy_set_header X-Forwarded-Proto \$scheme;"
+  echo "    proxy_read_timeout 86400s;"
+  echo "    proxy_send_timeout 86400s;"
+  echo "    proxy_buffering off;"
+}
+
 {
   echo "location = ${AUTH_LOCATION} {"
   echo "    internal;"
@@ -95,7 +110,7 @@ append_proxy_directives() {
   echo "        return 302 \$scheme://\$host${PUBLIC_PATH}/vnc.html?${VNC_QUERY};"
   echo "    }"
   append_auth_directives
-  append_proxy_directives
+  append_vnc_html_proxy_directives
   echo "}"
   echo ""
   echo "location ^~ ${PUBLIC_PATH}/ {"
