@@ -119,6 +119,8 @@ class GeoMonitorMaintenanceTest extends TestCase
             'geoflow.geo_monitor.runtime' => 'headless_linux',
             'geoflow.geo_monitor.enabled' => true,
             'geoflow.geo_monitor.sidecar_url' => 'http://sidecar.test',
+            'geoflow.geo_monitor.novnc.public_enabled' => true,
+            'app.url' => 'https://geo.example.com',
         ]);
 
         $admin = $this->createAdmin();
@@ -139,7 +141,8 @@ class GeoMonitorMaintenanceTest extends TestCase
         $this->actingAs($admin, 'admin')
             ->post(route('admin.geo-monitoring.accounts.maintenance.launch-browser', ['accountId' => $account->id]))
             ->assertRedirect(route('admin.geo-monitoring.accounts.maintenance', ['accountId' => $account->id]))
-            ->assertSessionHas('geo_monitor_maintenance_session.session_id', 'sess-headless-01');
+            ->assertSessionHas('geo_monitor_maintenance_session')
+            ->assertSessionHas('geo_monitor_open_novnc_url', 'https://geo.example.com/geo-monitor/novnc/vnc.html');
     }
 
     /**

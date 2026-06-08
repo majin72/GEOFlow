@@ -76,8 +76,8 @@ class GeoMonitorNovncPublicAccessTest extends TestCase
         $this->actingAs($this->createAdmin(), 'admin')
             ->get(route('admin.geo-monitoring.accounts.maintenance', ['accountId' => $account->id]))
             ->assertOk()
-            ->assertSee('path=geo-monitor%2Fnovnc%2Fwebsockify')
-            ->assertSee('autoconnect=true')
+            ->assertSee('https://geo.example.com/geo-monitor/novnc/vnc.html')
+            ->assertDontSee('path=geo-monitor')
             ->assertSee(__('admin.geo_monitoring.maintenance_interactive_title_novnc_public'))
             ->assertDontSee('ssh -N -L 6080');
     }

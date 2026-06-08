@@ -119,10 +119,17 @@ class GeoMonitoringMaintenanceController extends Controller
                 ->withErrors($exception->getMessage());
         }
 
-        return redirect()
+        $redirect = redirect()
             ->route('admin.geo-monitoring.accounts.maintenance', ['accountId' => $account->id])
             ->with('message', __('admin.geo_monitoring.maintenance_browser_launched'))
             ->with('geo_monitor_maintenance_session', $session);
+
+        $openNovncUrl = $maintenanceService->resolvePublicNovncOpenUrl();
+        if ($openNovncUrl !== null) {
+            $redirect->with('geo_monitor_open_novnc_url', $openNovncUrl);
+        }
+
+        return $redirect;
     }
 
     /**

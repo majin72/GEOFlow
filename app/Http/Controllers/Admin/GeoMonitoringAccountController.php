@@ -100,9 +100,16 @@ class GeoMonitoringAccountController extends Controller
             $maintenanceService->beginMaintenance($account->fresh() ?? $account, $admin, 'initial_login');
             $session = $maintenanceService->launchInteractiveBrowser($account->fresh() ?? $account, 'login');
 
-            return $redirect
+            $redirectWithSession = $redirect
                 ->with('message', __('admin.geo_monitoring.message.account_created_launching'))
                 ->with('geo_monitor_maintenance_session', $session);
+
+            $openNovncUrl = $maintenanceService->resolvePublicNovncOpenUrl();
+            if ($openNovncUrl !== null) {
+                $redirectWithSession->with('geo_monitor_open_novnc_url', $openNovncUrl);
+            }
+
+            return $redirectWithSession;
         } catch (\InvalidArgumentException $exception) {
             return $redirect
                 ->with('message', __('admin.geo_monitoring.message.account_created_onboarding'))

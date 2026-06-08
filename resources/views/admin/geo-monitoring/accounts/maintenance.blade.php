@@ -70,7 +70,7 @@
                                     <p class="mt-2 text-xs text-gray-500">
                                         {{ __('admin.geo_monitoring.maintenance_novnc_public_auth', ['mode' => $guide['novnc_auth_mode_label'] ?? '']) }}
                                     </p>
-                                    <p class="mt-1 text-xs text-amber-700">{{ __('admin.geo_monitoring.maintenance_novnc_public_https_hint') }}</p>
+                                    <p class="mt-1 text-xs text-gray-500">{{ __('admin.geo_monitoring.maintenance_novnc_public_redirect_hint') }}</p>
                                 </div>
                             </div>
                         @elseif ($isNovncInteractive && ! empty($guide['ssh_tunnel_command']))
@@ -209,4 +209,17 @@
             </div>
         </div>
     </div>
+
+    @if (session('geo_monitor_open_novnc_url'))
+        @push('scripts')
+            <script>
+                document.addEventListener('DOMContentLoaded', function () {
+                    const url = @json(session('geo_monitor_open_novnc_url'));
+                    if (url) {
+                        window.open(url, 'geo_monitor_novnc', 'noopener,noreferrer');
+                    }
+                });
+            </script>
+        @endpush
+    @endif
 @endsection

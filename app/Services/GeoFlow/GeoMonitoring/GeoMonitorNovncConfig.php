@@ -83,11 +83,19 @@ final class GeoMonitorNovncConfig
     }
 
     /**
-     * 公网 noVNC 页面完整 URL（含子路径反代所需的 WebSocket path 参数）。
+     * 公网 noVNC 短链接（Nginx 会自动补 WebSocket path 参数）。
+     */
+    public function publicVncSimpleUrl(): string
+    {
+        return rtrim((string) config('app.url'), '/').$this->publicPath.'/vnc.html';
+    }
+
+    /**
+     * 公网 noVNC 完整 URL（显式携带 WebSocket path，无 Nginx 重定向时亦可直连）。
      */
     public function publicVncUrl(): string
     {
-        $base = rtrim((string) config('app.url'), '/').$this->publicPath.'/vnc.html';
+        $base = $this->publicVncSimpleUrl();
         $appUrl = (string) config('app.url');
         $query = [
             'path' => $this->publicWebsocketPath(),

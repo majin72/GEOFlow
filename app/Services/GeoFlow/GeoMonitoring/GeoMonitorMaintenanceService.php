@@ -102,7 +102,7 @@ class GeoMonitorMaintenanceService
                 $context['novnc_public_enabled'] = $novncConfig->publicEnabled;
 
                 if ($novncConfig->publicEnabled) {
-                    $context['novnc_public_url'] = $novncConfig->publicVncUrl();
+                    $context['novnc_public_url'] = $novncConfig->publicVncSimpleUrl();
                     $context['novnc_auth_mode_label'] = __($novncConfig->authModeLabelKey());
                 } else {
                     /** @var array<string, mixed> $novnc */
@@ -201,6 +201,24 @@ class GeoMonitorMaintenanceService
     public function supportsInteractiveBrowser(): bool
     {
         return $this->bridgeClient->isOperational();
+    }
+
+    /**
+     * 公网 noVNC 模式下，点击「打开浏览器」后应自动弹出的远程桌面 URL。
+     */
+    public function resolvePublicNovncOpenUrl(): ?string
+    {
+        if (! $this->runtime->isHeadlessLinux()) {
+            return null;
+        }
+
+        $config = GeoMonitorNovncConfig::fromConfig();
+
+        if (! $config->publicEnabled) {
+            return null;
+        }
+
+        return $config->publicVncSimpleUrl();
     }
 
     /**

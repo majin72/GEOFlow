@@ -4072,7 +4072,7 @@ return [
         'maintenance_browser_open_hint_novnc' => 'Complete login in the noVNC window. If the screen is black, click "Open browser and sign in" again or refresh noVNC.',
         'maintenance_novnc_public_url' => 'Remote desktop URL (open in new tab)',
         'maintenance_novnc_public_auth' => 'Access control: :mode',
-        'maintenance_novnc_public_https_hint' => 'Use HTTPS only. Visitors without admin sign-in will be prompted to log in or enter dedicated credentials.',
+        'maintenance_novnc_public_redirect_hint' => 'The page auto-connects to the remote desktop. Sign in to GEOFlow admin first (or use dedicated credentials). HTTPS is recommended on the public internet; HTTP is fine on internal networks.',
         'maintenance_step_interactive_public_login' => 'Stay signed in to GEOFlow admin (or note the dedicated remote-desktop username/password if enabled).',
         'maintenance_step_interactive_public_novnc' => 'After "Open browser and sign in", open the remote desktop link above and complete platform login or captcha.',
         'novnc_auth_mode_admin' => 'GEOFlow admin session required',

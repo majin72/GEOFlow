@@ -9,6 +9,8 @@ PUBLIC_PATH="${GEOFLOW_GEO_MONITOR_NOVNC_PUBLIC_PATH:-/geo-monitor/novnc}"
 PUBLIC_PATH="/${PUBLIC_PATH#/}"
 PUBLIC_PATH="${PUBLIC_PATH%/}"
 AUTH_LOCATION="$(dirname "$PUBLIC_PATH")/novnc-auth"
+WS_PATH="${PUBLIC_PATH#/}/websockify"
+VNC_QUERY="path=${WS_PATH}&autoconnect=true&resize=scale"
 
 mkdir -p /etc/nginx/snippets
 rm -f "$LEGACY_CONF"
@@ -24,6 +26,49 @@ UPSTREAM="${GEOFLOW_GEO_MONITOR_NOVNC_UPSTREAM:-geo-monitor-sidecar:6080}"
 PHP_FPM="${GEO_MONITOR_PHP_FPM_UPSTREAM:-app:9000}"
 HTPASSWD="/etc/nginx/geo-monitor-novnc.htpasswd"
 
+append_auth_directives() {
+  case "$AUTH_MODE" in
+    both)
+      echo "    satisfy any;"
+      echo "    auth_request ${AUTH_LOCATION};"
+      ;;
+    admin_session)
+      echo "    auth_request ${AUTH_LOCATION};"
+      ;;
+    basic)
+      ;;
+    *)
+      echo "    auth_request ${AUTH_LOCATION};"
+      ;;
+  esac
+
+  if [ "$AUTH_MODE" = "basic" ] || [ "$AUTH_MODE" = "both" ]; then
+    BASIC_USER="${GEOFLOW_GEO_MONITOR_NOVNC_BASIC_USER:-}"
+    BASIC_PASS="${GEOFLOW_GEO_MONITOR_NOVNC_BASIC_PASSWORD:-}"
+    if [ -n "$BASIC_USER" ] && [ -n "$BASIC_PASS" ]; then
+      if ! command -v htpasswd >/dev/null 2>&1; then
+        apk add --no-cache apache2-utils >/dev/null
+      fi
+      htpasswd -cb "$HTPASSWD" "$BASIC_USER" "$BASIC_PASS"
+      echo "    auth_basic \"GEO Monitor Remote Desktop\";"
+      echo "    auth_basic_user_file ${HTPASSWD};"
+    fi
+  fi
+}
+
+append_proxy_directives() {
+  echo "    proxy_pass http://${UPSTREAM}/;"
+  echo "    proxy_http_version 1.1;"
+  echo "    proxy_set_header Upgrade \$http_upgrade;"
+  echo "    proxy_set_header Connection \$connection_upgrade;"
+  echo "    proxy_set_header Host \$host;"
+  echo "    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;"
+  echo "    proxy_set_header X-Forwarded-Proto \$scheme;"
+  echo "    proxy_read_timeout 86400s;"
+  echo "    proxy_send_timeout 86400s;"
+  echo "    proxy_buffering off;"
+}
+
 {
   echo "location = ${AUTH_LOCATION} {"
   echo "    internal;"
@@ -37,47 +82,24 @@ HTPASSWD="/etc/nginx/geo-monitor-novnc.htpasswd"
   echo "    fastcgi_param CONTENT_LENGTH \"\";"
   echo "}"
   echo ""
-  echo "location ^~ ${PUBLIC_PATH}/ {"
-} >"$SNIPPET"
-
-case "$AUTH_MODE" in
-  both)
-    echo "    satisfy any;" >>"$SNIPPET"
-    echo "    auth_request ${AUTH_LOCATION};" >>"$SNIPPET"
-    ;;
-  admin_session)
-    echo "    auth_request ${AUTH_LOCATION};" >>"$SNIPPET"
-    ;;
-  basic)
-    ;;
-  *)
-    echo "    auth_request ${AUTH_LOCATION};" >>"$SNIPPET"
-    ;;
-esac
-
-if [ "$AUTH_MODE" = "basic" ] || [ "$AUTH_MODE" = "both" ]; then
-  BASIC_USER="${GEOFLOW_GEO_MONITOR_NOVNC_BASIC_USER:-}"
-  BASIC_PASS="${GEOFLOW_GEO_MONITOR_NOVNC_BASIC_PASSWORD:-}"
-  if [ -n "$BASIC_USER" ] && [ -n "$BASIC_PASS" ]; then
-    if ! command -v htpasswd >/dev/null 2>&1; then
-      apk add --no-cache apache2-utils >/dev/null
-    fi
-    htpasswd -cb "$HTPASSWD" "$BASIC_USER" "$BASIC_PASS"
-    echo "    auth_basic \"GEO Monitor Remote Desktop\";" >>"$SNIPPET"
-    echo "    auth_basic_user_file ${HTPASSWD};" >>"$SNIPPET"
-  fi
-fi
-
-{
-  echo "    proxy_pass http://${UPSTREAM}/;"
-  echo "    proxy_http_version 1.1;"
-  echo "    proxy_set_header Upgrade \$http_upgrade;"
-  echo "    proxy_set_header Connection \$connection_upgrade;"
-  echo "    proxy_set_header Host \$host;"
-  echo "    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;"
-  echo "    proxy_set_header X-Forwarded-Proto \$scheme;"
-  echo "    proxy_read_timeout 86400s;"
-  echo "    proxy_send_timeout 86400s;"
-  echo "    proxy_buffering off;"
+  echo "location = ${PUBLIC_PATH} {"
+  echo "    return 302 ${PUBLIC_PATH}/vnc.html?${VNC_QUERY};"
   echo "}"
-} >>"$SNIPPET"
+  echo ""
+  echo "location = ${PUBLIC_PATH}/ {"
+  echo "    return 302 ${PUBLIC_PATH}/vnc.html?${VNC_QUERY};"
+  echo "}"
+  echo ""
+  echo "location = ${PUBLIC_PATH}/vnc.html {"
+  echo "    if (\$arg_path = \"\") {"
+  echo "        return 302 \$scheme://\$host${PUBLIC_PATH}/vnc.html?${VNC_QUERY};"
+  echo "    }"
+  append_auth_directives
+  append_proxy_directives
+  echo "}"
+  echo ""
+  echo "location ^~ ${PUBLIC_PATH}/ {"
+  append_auth_directives
+  append_proxy_directives
+  echo "}"
+} >"$SNIPPET"

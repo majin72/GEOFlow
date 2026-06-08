@@ -4073,7 +4073,7 @@ return [
         'maintenance_browser_open_hint_novnc' => '请在 noVNC 窗口中完成登录；若仍是黑屏，请先点「打开浏览器并登录」或刷新 noVNC 页面。',
         'maintenance_novnc_public_url' => '远程桌面地址（新标签页打开）',
         'maintenance_novnc_public_auth' => '访问鉴权：:mode',
-        'maintenance_novnc_public_https_hint' => '请务必通过 HTTPS 访问站点；未登录后台时系统会要求登录或弹出专用账号密码框。',
+        'maintenance_novnc_public_redirect_hint' => '打开后会自动连接远程桌面；须已登录 GEOFlow 后台（或专用账号密码）。公网环境建议 HTTPS，内网 HTTP 亦可。',
         'maintenance_step_interactive_public_login' => '保持本 GEOFlow 后台已登录（若启用专用账号，请记下运维提供的用户名与密码）。',
         'maintenance_step_interactive_public_novnc' => '点击「打开浏览器并登录」后，打开上方远程桌面链接，在画面里完成平台登录或验证码。',
         'novnc_auth_mode_admin' => '须已登录 GEOFlow 后台',
