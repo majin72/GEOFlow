@@ -5,6 +5,11 @@ set -eu
 SNIPPET="/etc/nginx/snippets/geo-monitor-novnc-locations.conf"
 LEGACY_CONF="/etc/nginx/conf.d/geo-monitor-novnc.conf"
 
+PUBLIC_PATH="${GEOFLOW_GEO_MONITOR_NOVNC_PUBLIC_PATH:-/geo-monitor/novnc}"
+PUBLIC_PATH="/${PUBLIC_PATH#/}"
+PUBLIC_PATH="${PUBLIC_PATH%/}"
+AUTH_LOCATION="$(dirname "$PUBLIC_PATH")/novnc-auth"
+
 mkdir -p /etc/nginx/snippets
 rm -f "$LEGACY_CONF"
 
@@ -20,7 +25,7 @@ PHP_FPM="${GEO_MONITOR_PHP_FPM_UPSTREAM:-app:9000}"
 HTPASSWD="/etc/nginx/geo-monitor-novnc.htpasswd"
 
 {
-  echo "location = /geo-monitor/novnc-auth {"
+  echo "location = ${AUTH_LOCATION} {"
   echo "    internal;"
   echo "    include fastcgi_params;"
   echo "    fastcgi_param SCRIPT_FILENAME /var/www/html/public/index.php;"
@@ -32,21 +37,21 @@ HTPASSWD="/etc/nginx/geo-monitor-novnc.htpasswd"
   echo "    fastcgi_param CONTENT_LENGTH \"\";"
   echo "}"
   echo ""
-  echo "location ^~ /geo-monitor/novnc/ {"
+  echo "location ^~ ${PUBLIC_PATH}/ {"
 } >"$SNIPPET"
 
 case "$AUTH_MODE" in
   both)
     echo "    satisfy any;" >>"$SNIPPET"
-    echo "    auth_request /geo-monitor/novnc-auth;" >>"$SNIPPET"
+    echo "    auth_request ${AUTH_LOCATION};" >>"$SNIPPET"
     ;;
   admin_session)
-    echo "    auth_request /geo-monitor/novnc-auth;" >>"$SNIPPET"
+    echo "    auth_request ${AUTH_LOCATION};" >>"$SNIPPET"
     ;;
   basic)
     ;;
   *)
-    echo "    auth_request /geo-monitor/novnc-auth;" >>"$SNIPPET"
+    echo "    auth_request ${AUTH_LOCATION};" >>"$SNIPPET"
     ;;
 esac
 
@@ -67,11 +72,12 @@ fi
   echo "    proxy_pass http://${UPSTREAM}/;"
   echo "    proxy_http_version 1.1;"
   echo "    proxy_set_header Upgrade \$http_upgrade;"
-  echo "    proxy_set_header Connection \"upgrade\";"
+  echo "    proxy_set_header Connection \$connection_upgrade;"
   echo "    proxy_set_header Host \$host;"
   echo "    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;"
   echo "    proxy_set_header X-Forwarded-Proto \$scheme;"
   echo "    proxy_read_timeout 86400s;"
   echo "    proxy_send_timeout 86400s;"
+  echo "    proxy_buffering off;"
   echo "}"
 } >>"$SNIPPET"

@@ -75,11 +75,31 @@ final class GeoMonitorNovncConfig
     }
 
     /**
-     * 公网 noVNC 页面完整 URL（vnc.html）。
+     * 经 Nginx 反代时 noVNC WebSocket 路径（相对站点根，无 leading slash）。
+     */
+    public function publicWebsocketPath(): string
+    {
+        return trim($this->publicPath, '/').'/websockify';
+    }
+
+    /**
+     * 公网 noVNC 页面完整 URL（含子路径反代所需的 WebSocket path 参数）。
      */
     public function publicVncUrl(): string
     {
-        return rtrim((string) config('app.url'), '/').$this->publicPath.'/vnc.html';
+        $base = rtrim((string) config('app.url'), '/').$this->publicPath.'/vnc.html';
+        $appUrl = (string) config('app.url');
+        $query = [
+            'path' => $this->publicWebsocketPath(),
+            'autoconnect' => 'true',
+            'resize' => 'scale',
+        ];
+
+        if (str_starts_with(strtolower($appUrl), 'https://')) {
+            $query['encrypt'] = '1';
+        }
+
+        return $base.'?'.http_build_query($query);
     }
 
     /**

@@ -40,6 +40,7 @@ RUN sed -i "s/dl-cdn.alpinelinux.org/${APK_MIRROR}/g" /etc/apk/repositories \
 COPY public /var/www/html/public
 # 用 Vite 构建产物覆盖/补齐宿主机 public/build（宿主机可能没本地构建过）
 COPY --from=assets /app/public/build /var/www/html/public/build
+COPY docker/nginx/00-websocket-map.conf /etc/nginx/conf.d/00-websocket-map.conf
 COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf
 COPY docker/nginx/docker-entrypoint.d/40-geo-monitor-novnc.sh /docker-entrypoint.d/40-geo-monitor-novnc.sh
 RUN mkdir -p /etc/nginx/snippets \
