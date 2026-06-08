@@ -1,8 +1,15 @@
 #!/bin/sh
-# 按环境变量生成 GEO 监测 noVNC 公网反代配置（可选）。
+# 按环境变量生成 GEO 监测 noVNC 公网反代 location 片段（须被 default.conf server 块 include）。
 set -eu
 
+SNIPPET="/etc/nginx/snippets/geo-monitor-novnc-locations.conf"
+LEGACY_CONF="/etc/nginx/conf.d/geo-monitor-novnc.conf"
+
+mkdir -p /etc/nginx/snippets
+rm -f "$LEGACY_CONF"
+
 if [ "${GEOFLOW_GEO_MONITOR_NOVNC_PUBLIC_ENABLED:-false}" != "true" ]; then
+  echo "# GEO monitor noVNC public access disabled" >"$SNIPPET"
   exit 0
 fi
 
@@ -10,7 +17,6 @@ AUTH_MODE="${GEOFLOW_GEO_MONITOR_NOVNC_AUTH_MODE:-admin_session}"
 ADMIN_PREFIX="${GEOFLOW_ADMIN_BASE_PATH:-geo_admin}"
 UPSTREAM="${GEOFLOW_GEO_MONITOR_NOVNC_UPSTREAM:-geo-monitor-sidecar:6080}"
 PHP_FPM="${GEO_MONITOR_PHP_FPM_UPSTREAM:-app:9000}"
-CONF="/etc/nginx/conf.d/geo-monitor-novnc.conf"
 HTPASSWD="/etc/nginx/geo-monitor-novnc.htpasswd"
 
 {
@@ -27,20 +33,20 @@ HTPASSWD="/etc/nginx/geo-monitor-novnc.htpasswd"
   echo "}"
   echo ""
   echo "location /geo-monitor/novnc/ {"
-} >"$CONF"
+} >"$SNIPPET"
 
 case "$AUTH_MODE" in
   both)
-    echo "    satisfy any;" >>"$CONF"
-    echo "    auth_request /geo-monitor/novnc-auth;" >>"$CONF"
+    echo "    satisfy any;" >>"$SNIPPET"
+    echo "    auth_request /geo-monitor/novnc-auth;" >>"$SNIPPET"
     ;;
   admin_session)
-    echo "    auth_request /geo-monitor/novnc-auth;" >>"$CONF"
+    echo "    auth_request /geo-monitor/novnc-auth;" >>"$SNIPPET"
     ;;
   basic)
     ;;
   *)
-    echo "    auth_request /geo-monitor/novnc-auth;" >>"$CONF"
+    echo "    auth_request /geo-monitor/novnc-auth;" >>"$SNIPPET"
     ;;
 esac
 
@@ -52,8 +58,8 @@ if [ "$AUTH_MODE" = "basic" ] || [ "$AUTH_MODE" = "both" ]; then
       apk add --no-cache apache2-utils >/dev/null
     fi
     htpasswd -cb "$HTPASSWD" "$BASIC_USER" "$BASIC_PASS"
-    echo "    auth_basic \"GEO Monitor Remote Desktop\";" >>"$CONF"
-    echo "    auth_basic_user_file ${HTPASSWD};" >>"$CONF"
+    echo "    auth_basic \"GEO Monitor Remote Desktop\";" >>"$SNIPPET"
+    echo "    auth_basic_user_file ${HTPASSWD};" >>"$SNIPPET"
   fi
 fi
 
@@ -68,4 +74,4 @@ fi
   echo "    proxy_read_timeout 86400s;"
   echo "    proxy_send_timeout 86400s;"
   echo "}"
-} >>"$CONF"
+} >>"$SNIPPET"
