@@ -28,11 +28,14 @@ COPY vite.config.js ./
 
 RUN npm run build
 
-FROM nginx:1.30.1-alpine
+FROM nginx:1.31.1-alpine
 
 WORKDIR /var/www/html
 
-RUN apk add --no-cache apache2-utils gettext
+# Alpine apk 国内镜像（与 app Dockerfile 阿里云源一致；海外构建可传 --build-arg APK_MIRROR=dl-cdn.alpinelinux.org）
+ARG APK_MIRROR=mirrors.aliyun.com
+RUN sed -i "s/dl-cdn.alpinelinux.org/${APK_MIRROR}/g" /etc/apk/repositories \
+    && apk add --no-cache apache2-utils
 
 COPY public /var/www/html/public
 # 用 Vite 构建产物覆盖/补齐宿主机 public/build（宿主机可能没本地构建过）
