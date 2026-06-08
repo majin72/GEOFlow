@@ -23,6 +23,11 @@ Schedule::command('horizon:snapshot')->everyFiveMinutes();
 Schedule::command('geoflow:schedule-tasks')->everyMinute();
 
 /**
+ * GEO 监测定时计划：每分钟扫描到期计划并创建批次。
+ */
+Schedule::command('geoflow:geo-monitor-schedule')->everyMinute();
+
+/**
  * 前台静态 sitemap：生产环境每日凌晨重写 storage/app/public/sitemap.xml（需服务器 cron 运行 `schedule:run`）。
  */
 Schedule::command('geoflow:generate-static-sitemap')

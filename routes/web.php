@@ -24,10 +24,14 @@ use App\Http\Controllers\Admin\ExternalFetchSettingsController;
 use App\Http\Controllers\Admin\GeoMonitoringAccountController;
 use App\Http\Controllers\Admin\GeoMonitoringBrowserProfileController;
 use App\Http\Controllers\Admin\GeoMonitoringController;
+use App\Http\Controllers\Admin\GeoMonitoringDashboardController;
+use App\Http\Controllers\Admin\GeoMonitoringExportController;
 use App\Http\Controllers\Admin\GeoMonitoringMaintenanceController;
 use App\Http\Controllers\Admin\GeoMonitoringProjectController;
 use App\Http\Controllers\Admin\GeoMonitoringProxyController;
 use App\Http\Controllers\Admin\GeoMonitoringRunOpsController;
+use App\Http\Controllers\Admin\GeoMonitoringScheduleController;
+use App\Http\Controllers\Admin\GeoMonitoringSettingsController;
 use App\Http\Controllers\Admin\ImageLibraryController;
 use App\Http\Controllers\Admin\KeywordLibraryController;
 use App\Http\Controllers\Admin\KnowledgeBaseController;
@@ -89,6 +93,11 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
 
         Route::prefix('geo-monitoring')->name('geo-monitoring.')->group(function () {
             Route::get('/', [GeoMonitoringController::class, 'index'])->name('index');
+            Route::get('dashboard', [GeoMonitoringDashboardController::class, 'index'])->name('dashboard');
+            Route::get('settings', [GeoMonitoringSettingsController::class, 'index'])->name('settings.index');
+            Route::post('settings', [GeoMonitoringSettingsController::class, 'update'])->name('settings.update');
+            Route::post('settings/test-mail', [GeoMonitoringSettingsController::class, 'sendTestMail'])->name('settings.test-mail');
+            Route::post('alerts/{alertId}/acknowledge', [GeoMonitoringDashboardController::class, 'acknowledgeAlert'])->name('alerts.acknowledge');
 
             Route::get('projects/create', [GeoMonitoringProjectController::class, 'create'])->name('projects.create');
             Route::post('projects', [GeoMonitoringProjectController::class, 'store'])->name('projects.store');
@@ -98,6 +107,8 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
 
             Route::get('projects/{projectId}', [GeoMonitoringController::class, 'showProject'])->name('project');
             Route::post('projects/{projectId}/runs', [GeoMonitoringController::class, 'storeRun'])->name('runs.store');
+            Route::post('projects/{projectId}/schedule', [GeoMonitoringScheduleController::class, 'store'])->name('schedules.store');
+            Route::get('projects/{projectId}/export', [GeoMonitoringExportController::class, 'project'])->name('projects.export');
 
             Route::get('accounts', [GeoMonitoringAccountController::class, 'index'])->name('accounts.index');
             Route::get('accounts/create', [GeoMonitoringAccountController::class, 'create'])->name('accounts.create');
@@ -128,6 +139,7 @@ Route::prefix($adminPrefix)->name('admin.')->middleware(['admin.locale'])->group
             Route::put('profiles/{profileId}', [GeoMonitoringBrowserProfileController::class, 'update'])->name('profiles.update');
 
             Route::get('runs/{runId}', [GeoMonitoringController::class, 'showRun'])->name('run');
+            Route::get('runs/{runId}/export', [GeoMonitoringExportController::class, 'run'])->name('runs.export');
             Route::post('runs/{runId}/cancel', [GeoMonitoringRunOpsController::class, 'cancelRun'])->name('runs.cancel');
             Route::post('runs/{runId}/retry-failed', [GeoMonitoringRunOpsController::class, 'retryFailed'])->name('runs.retry-failed');
             Route::post('runs/{runId}/observations/{observationId}/retry', [GeoMonitoringRunOpsController::class, 'retryObservation'])

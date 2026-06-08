@@ -1,5 +1,9 @@
 <?php
 
+/**
+ * 任务表增加文章总量上限与下次发布时间字段。
+ */
+
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -15,11 +19,11 @@ return new class extends Migration
 
         Schema::table('tasks', function (Blueprint $table): void {
             if (! Schema::hasColumn('tasks', 'article_limit')) {
-                $table->integer('article_limit')->default(10)->after('draft_limit');
+                $table->integer('article_limit')->default(10)->after('draft_limit')->comment('任务文章总量上限');
             }
 
             if (! Schema::hasColumn('tasks', 'next_publish_at')) {
-                $table->timestamp('next_publish_at')->nullable()->after('next_run_at');
+                $table->timestamp('next_publish_at')->nullable()->after('next_run_at')->comment('下次允许发布的时间');
             }
         });
 

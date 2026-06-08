@@ -1,5 +1,9 @@
 <?php
 
+/**
+ * 分发渠道表增加站点设置 JSON 字段。
+ */
+
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -13,7 +17,7 @@ return new class extends Migration
         }
 
         Schema::table('distribution_channels', function (Blueprint $table): void {
-            $table->json('site_settings')->nullable()->after('template_key');
+            $table->json('site_settings')->nullable()->after('template_key')->comment('远端站点展示设置 JSON');
         });
     }
 

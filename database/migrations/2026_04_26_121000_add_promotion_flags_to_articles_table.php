@@ -1,5 +1,9 @@
 <?php
 
+/**
+ * 文章表增加热门与精选推广标记字段。
+ */
+
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -14,11 +18,11 @@ return new class extends Migration
 
         Schema::table('articles', function (Blueprint $table): void {
             if (! Schema::hasColumn('articles', 'is_hot')) {
-                $table->boolean('is_hot')->default(false)->after('is_ai_generated');
+                $table->boolean('is_hot')->default(false)->after('is_ai_generated')->comment('是否标记为热门文章');
             }
 
             if (! Schema::hasColumn('articles', 'is_featured')) {
-                $table->boolean('is_featured')->default(false)->after('is_hot');
+                $table->boolean('is_featured')->default(false)->after('is_hot')->comment('是否标记为精选文章');
             }
         });
 

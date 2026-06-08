@@ -77,6 +77,79 @@
             </button>
         </form>
 
+        @php
+            $currentSchedule = $schedule;
+            $selectedPlatforms = is_array($currentSchedule?->platform_scope) ? $currentSchedule->platform_scope : [];
+        @endphp
+        <form method="post" action="{{ route('admin.geo-monitoring.schedules.store', ['projectId' => $project->id]) }}" class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+            @csrf
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h2 class="text-lg font-medium text-gray-900">{{ __('admin.geo_monitoring.schedule.title') }}</h2>
+                    <p class="mt-1 text-sm text-gray-600">{{ __('admin.geo_monitoring.schedule.hint') }}</p>
+                </div>
+                @if ($currentSchedule?->next_run_at)
+                    <div class="text-xs text-gray-500">
+                        {{ __('admin.geo_monitoring.schedule.next_run') }}:
+                        <span class="font-medium text-gray-800">{{ $currentSchedule->next_run_at->timezone($currentSchedule->timezone)->format('Y-m-d H:i') }}</span>
+                    </div>
+                @endif
+            </div>
+            <div class="mt-6 grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">{{ __('admin.geo_monitoring.schedule.frequency') }}</label>
+                    <select name="frequency" class="mt-1 w-full rounded-md border-gray-300 text-sm shadow-sm">
+                        @foreach (['manual', 'daily', 'weekly'] as $frequency)
+                            <option value="{{ $frequency }}" @selected(($currentSchedule?->frequency ?? 'manual') === $frequency)>
+                                {{ __('admin.geo_monitoring.schedule.frequency_'.$frequency) }}
+                            </option>
+                        @endforeach
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">{{ __('admin.geo_monitoring.schedule.run_time') }}</label>
+                    <input type="time" name="run_time" value="{{ $currentSchedule?->run_time ?? '09:00' }}" class="mt-1 w-full rounded-md border-gray-300 text-sm shadow-sm">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">{{ __('admin.geo_monitoring.schedule.timezone') }}</label>
+                    <input type="text" name="timezone" value="{{ $currentSchedule?->timezone ?? 'Asia/Shanghai' }}" class="mt-1 w-full rounded-md border-gray-300 text-sm shadow-sm">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">{{ __('admin.geo_monitoring.schedule.weekday') }}</label>
+                    <select name="weekday" class="mt-1 w-full rounded-md border-gray-300 text-sm shadow-sm">
+                        @for ($d = 1; $d <= 7; $d++)
+                            <option value="{{ $d }}" @selected((int) ($currentSchedule?->weekday ?? 1) === $d)>
+                                {{ __('admin.geo_monitoring.schedule.weekday_'.$d) }}
+                            </option>
+                        @endfor
+                    </select>
+                </div>
+            </div>
+            <div class="mt-4">
+                <div class="text-sm font-medium text-gray-700">{{ __('admin.geo_monitoring.platforms_label') }}</div>
+                <div class="mt-2 flex flex-wrap gap-4">
+                    @foreach ($platforms as $platform)
+                        <label class="inline-flex items-center gap-2 text-sm text-gray-700">
+                            <input type="checkbox" name="platform_scope[]" value="{{ $platform->code }}" class="rounded border-gray-300 text-blue-600" @checked(in_array($platform->code, $selectedPlatforms, true))>
+                            {{ $platform->label }}
+                        </label>
+                    @endforeach
+                </div>
+            </div>
+            <label class="mt-4 inline-flex items-center gap-2 text-sm text-gray-700">
+                <input type="checkbox" name="is_enabled" value="1" class="rounded border-gray-300 text-blue-600" @checked($currentSchedule?->is_enabled)>
+                {{ __('admin.geo_monitoring.schedule.is_enabled') }}
+            </label>
+            <div class="mt-6 flex flex-wrap gap-3">
+                <button type="submit" class="inline-flex items-center rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-900">
+                    {{ __('admin.geo_monitoring.button_save') }}
+                </button>
+                <a href="{{ route('admin.geo-monitoring.projects.export', ['projectId' => $project->id]) }}" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+                    {{ __('admin.geo_monitoring.button_export_csv') }}
+                </a>
+            </div>
+        </form>
+
         <div class="rounded-lg bg-white shadow">
             <div class="border-b border-gray-200 px-6 py-4">
                 <h2 class="text-lg font-medium text-gray-900">{{ __('admin.geo_monitoring.prompts_title') }}</h2>

@@ -64,7 +64,7 @@ class GeoMonitoringController extends Controller
     public function showProject(int $projectId): View|RedirectResponse
     {
         $project = GeoMonitorProject::query()
-            ->with(['prompts' => fn ($q) => $q->where('is_enabled', true)->orderBy('code')])
+            ->with(['prompts' => fn ($q) => $q->where('is_enabled', true)->orderBy('code'), 'schedule'])
             ->find($projectId);
 
         if ($project === null) {
@@ -91,6 +91,7 @@ class GeoMonitoringController extends Controller
             'project' => $project,
             'platforms' => $platforms,
             'runs' => $runs,
+            'schedule' => $project->schedule,
             'projectReport' => $this->reportService->buildProjectSummary($project),
             'isOperational' => $this->runService->isOperational(),
         ]);

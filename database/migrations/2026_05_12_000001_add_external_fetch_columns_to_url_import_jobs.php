@@ -1,5 +1,9 @@
 <?php
 
+/**
+ * URL 导入任务表增加外部浏览器抓取结果字段。
+ */
+
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -18,11 +22,11 @@ return new class extends Migration
     {
         Schema::table('url_import_jobs', function (Blueprint $table): void {
             if (! Schema::hasColumn('url_import_jobs', 'fetched_markdown')) {
-                $table->text('fetched_markdown')->nullable()->after('result_json');
+                $table->text('fetched_markdown')->nullable()->after('result_json')->comment('外部浏览器抓取得到的 Markdown 正文');
             }
 
             if (! Schema::hasColumn('url_import_jobs', 'fetch_source')) {
-                $table->string('fetch_source', 32)->default('direct')->after('fetched_markdown');
+                $table->string('fetch_source', 32)->default('direct')->after('fetched_markdown')->comment('抓取来源：direct/external_primary/external_fallback');
             }
         });
     }

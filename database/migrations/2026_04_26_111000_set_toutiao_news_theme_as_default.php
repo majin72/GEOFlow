@@ -1,5 +1,9 @@
 <?php
 
+/**
+ * 将默认前台主题设置为 toutiao-news-20260426（仅数据迁移，无表结构变更）。
+ */
+
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;

@@ -12,7 +12,6 @@ use App\Models\GeoMonitorPlatform;
 use App\Models\GeoMonitorProject;
 use App\Models\GeoMonitorPrompt;
 use App\Models\GeoMonitorRun;
-use App\Services\GeoFlow\GeoMonitoring\GeoMonitorSidecarAccountsExporter;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -54,6 +53,7 @@ class GeoMonitorRunService
         GeoMonitorProject $project,
         array $platformCodes = [],
         ?Admin $admin = null,
+        ?array $triggerMeta = null,
     ): GeoMonitorRun {
         if (! $this->isOperational()) {
             throw new InvalidArgumentException('GEO 监测未启用或未配置 sidecar URL');
@@ -76,7 +76,7 @@ class GeoMonitorRunService
             throw new InvalidArgumentException('没有可用的监测平台');
         }
 
-        $run = DB::transaction(function () use ($project, $admin, $platforms, $prompts): GeoMonitorRun {
+        $run = DB::transaction(function () use ($project, $admin, $platforms, $prompts, $triggerMeta): GeoMonitorRun {
             $run = GeoMonitorRun::query()->create([
                 'project_id' => $project->id,
                 'triggered_by_admin_id' => $admin?->id,
@@ -86,6 +86,7 @@ class GeoMonitorRunService
                 'observation_count' => $prompts->count() * $platforms->count(),
                 'success_count' => 0,
                 'started_at' => now(),
+                'meta' => $triggerMeta !== null && $triggerMeta !== [] ? $triggerMeta : null,
             ]);
 
             foreach ($platforms as $platform) {
@@ -171,6 +172,21 @@ class GeoMonitorRunService
         ]);
 
         $this->scoreRunIfPossible($run->fresh() ?? $run);
+        $this->evaluateAlerts($run->fresh() ?? $run);
+    }
+
+    /**
+     * 批次结束后触发异常告警评估。
+     *
+     * @param  GeoMonitorRun  $run  批次运行
+     */
+    private function evaluateAlerts(GeoMonitorRun $run): void
+    {
+        if (! in_array($run->status, ['succeeded', 'partial', 'failed'], true)) {
+            return;
+        }
+
+        app(GeoMonitorAlertService::class)->evaluateCompletedRun($run);
     }
 
     /**

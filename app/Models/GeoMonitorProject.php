@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class GeoMonitorProject extends Model
 {
@@ -63,5 +64,13 @@ class GeoMonitorProject extends Model
     public function scores(): HasMany
     {
         return $this->hasMany(GeoMonitorScore::class, 'project_id');
+    }
+
+    /**
+     * 项目定时监测计划（每项目至多一条）。
+     */
+    public function schedule(): HasOne
+    {
+        return $this->hasOne(GeoMonitorSchedule::class, 'project_id');
     }
 }
