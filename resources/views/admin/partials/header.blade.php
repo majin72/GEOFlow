@@ -26,7 +26,7 @@
         'distribution' => ['route' => 'admin.distribution.index', 'name' => __('admin.nav.distribution')],
         'articles' => ['route' => 'admin.articles.index', 'name' => __('admin.nav.articles')],
         'materials' => ['route' => 'admin.materials.index', 'name' => __('admin.nav.materials')],
-        'ai_ops' => ['route' => 'admin.ai-ops.index', 'name' => __('admin.nav.ai_ops')],
+        // 'ai_ops' => ['route' => 'admin.ai-ops.index', 'name' => __('admin.nav.ai_ops')],
         'ai_config' => ['route' => 'admin.ai.configurator', 'name' => __('admin.nav.ai_config')],
         'site_settings' => ['route' => 'admin.site-settings.index', 'name' => __('admin.nav.site_settings')],
     ];
