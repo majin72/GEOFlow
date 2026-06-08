@@ -43,7 +43,8 @@ COPY --from=assets /app/public/build /var/www/html/public/build
 COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf
 COPY docker/nginx/docker-entrypoint.d/40-geo-monitor-novnc.sh /docker-entrypoint.d/40-geo-monitor-novnc.sh
 RUN mkdir -p /etc/nginx/snippets \
-    && echo "# GEO monitor noVNC public access disabled" > /etc/nginx/snippets/geo-monitor-novnc-locations.conf
+    && echo "# GEO monitor noVNC public access disabled" > /etc/nginx/snippets/geo-monitor-novnc-locations.conf \
+    && rm -f /etc/nginx/conf.d/geo-monitor-novnc.conf
 
 RUN chmod +x /docker-entrypoint.d/40-geo-monitor-novnc.sh \
     && rm -f /var/www/html/public/storage \

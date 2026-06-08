@@ -32,7 +32,7 @@ HTPASSWD="/etc/nginx/geo-monitor-novnc.htpasswd"
   echo "    fastcgi_param CONTENT_LENGTH \"\";"
   echo "}"
   echo ""
-  echo "location /geo-monitor/novnc/ {"
+  echo "location ^~ /geo-monitor/novnc/ {"
 } >"$SNIPPET"
 
 case "$AUTH_MODE" in
