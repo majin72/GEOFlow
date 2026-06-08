@@ -10,6 +10,12 @@ $adminBasePath = $adminBasePath !== '' ? $adminBasePath : 'geo_admin';
 $defaultUpdateMetadataUrl = 'https://raw.githubusercontent.com/yaojingang/GEOFlow/main/version.json';
 $updateMetadataUrl = trim((string) env('GEOFLOW_UPDATE_METADATA_URL', $defaultUpdateMetadataUrl));
 $updateMetadataUrl = $updateMetadataUrl !== '' ? $updateMetadataUrl : $defaultUpdateMetadataUrl;
+$versionManifestPath = __DIR__.'/../version.json';
+$versionManifest = is_file($versionManifestPath)
+    ? json_decode((string) file_get_contents($versionManifestPath), true)
+    : [];
+$appVersion = is_array($versionManifest) ? trim((string) ($versionManifest['version'] ?? '')) : '';
+$appVersion = $appVersion !== '' ? $appVersion : '2.0.4';
 
 /**
  * 将 GEO 监测 POC/证据路径解析为容器内可用的绝对路径。
@@ -54,8 +60,8 @@ return [
     // 默认前台主题；后台未显式选择主题时使用
     'default_theme' => env('GEOFLOW_DEFAULT_THEME', 'toutiao-news-20260426'),
 
-    // 当前系统版本（底部展示、GitHub 更新检查对比）
-    'app_version' => env('GEOFLOW_APP_VERSION', '2.0.3'),
+    // 当前系统版本（底部展示、GitHub 更新检查对比）；默认跟随本地 version.json，避免已部署 .env 锁死版本号。
+    'app_version' => $appVersion,
     // 欢迎弹窗「介绍」文案版本：变更后所有管理员会再次看到介绍弹窗
     'welcome_intro_version' => env('GEOFLOW_WELCOME_INTRO_VERSION', '2.1'),
     // GitHub version.json 地址；默认每天检查一次，可通过 GEOFLOW_UPDATE_CHECK_ENABLED=false 关闭
@@ -101,7 +107,7 @@ return [
     // 默认仅让 AI/Embedding 供应商走代理，避免 WordPress REST、目标站 Agent 等站点通信被本机代理截获；如需全局代理可设为 *。
     'outbound_proxy_hosts' => array_values(array_filter(array_map('trim', explode(',', (string) env(
         'GEOFLOW_PROXY_HOSTS',
-        'generativelanguage.googleapis.com,api.openai.com,api.deepseek.com,openrouter.ai,api.anthropic.com,api.mistral.ai,api.groq.com,api.x.ai,api.minimaxi.com,api.siliconflow.cn,ark.cn-beijing.volces.com,dashscope.aliyuncs.com,open.bigmodel.cn'
+        'generativelanguage.googleapis.com,api.openai.com,api.deepseek.com,openrouter.ai,api.anthropic.com,api.mistral.ai,api.groq.com,api.x.ai,api.minimax.io,api.minimaxi.com,api.siliconflow.cn,ark.cn-beijing.volces.com,dashscope.aliyuncs.com,open.bigmodel.cn'
     ))), static fn (string $host): bool => $host !== '')),
     // 为 true 时记录知识库「查询向量」是否由默认 embedding 接口生成（便于对照 bak 验证；默认关闭）
     'debug_knowledge_query_embedding' => filter_var(env('GEOFLOW_DEBUG_KNOWLEDGE_QUERY_EMBEDDING', false), FILTER_VALIDATE_BOOLEAN),
@@ -109,6 +115,9 @@ return [
     'semantic_chunking_max_chars' => max(1, (int) env('GEOFLOW_SEMANTIC_CHUNKING_MAX_CHARS', 20000)),
     // Embedding 文档向量化单次请求切片数；部分供应商限制 batch 较小，默认保守拆分。
     'embedding_batch_size' => max(1, min(64, (int) env('GEOFLOW_EMBEDDING_BATCH_SIZE', 1))),
+    // 正文生成默认最大输出 token 数；当 AI 模型未单独配置 max_tokens 时使用此兜底值，
+    // 避免依赖各服务商较小的默认上限（常见 4K）导致长文被截断。
+    'content_max_tokens' => max(256, (int) env('GEOFLOW_CONTENT_MAX_TOKENS', 8192)),
 
     // 本地上传根目录（绝对路径）
     'upload_path' => env('GEOFLOW_UPLOAD_PATH', public_path('assets/images')),

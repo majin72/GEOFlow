@@ -571,6 +571,7 @@ return array_replace_recursive($base, [
         'author_x_profile' => 'Perfil X do autor',
         'project_github_link' => 'GitHub do projeto',
         'changelog_link' => 'Registro de alterações',
+        'help_docs_link' => 'Documentação',
         'project_intro_link' => 'Introdução do projeto',
     ],
     'login' => [
@@ -1844,7 +1845,7 @@ return array_replace_recursive($base, [
         'modal_edit' => 'Editar Modelo',
         'quick_chat' => 'Preenchimento Rápido (Chat)',
         'quick_embedding' => 'Preenchimento Rápido (Embedding)',
-        'quick_help' => 'Clique para auto-preencher configurações comuns. Gemini usa a API nativa v1beta do Google; os demais provedores continuam seguindo as regras compatíveis com OpenAI.',
+        'quick_help' => 'Clique para auto-preencher configurações comuns. Gemini usa a API nativa v1beta do Google; modelos de chat e embedding seguem as regras do provedor para completar o endpoint correto. Volcengine Ark pode usar o nome do modelo ou um Endpoint ID como ep-xxxx.',
         'gemini_embedding_notice' => 'Gemini Embedding 2 aplica automaticamente prefixos de consulta/documento para retrieval; este sistema não oferece suporte à configuração task_type do gemini-embedding-001.',
         'field_name' => 'Nome do Modelo *',
         'field_version' => 'Versão',
@@ -1854,6 +1855,7 @@ return array_replace_recursive($base, [
         'field_api_url' => 'URL da API',
         'field_failover_priority' => 'Prioridade de Failover',
         'field_daily_limit' => 'Limite Diário',
+        'field_max_tokens' => 'Máximo de Tokens de Saída',
         'field_status' => 'Status',
         'type_chat_option' => 'Modelo de Chat',
         'type_embedding_option' => 'Modelo de Embedding',
@@ -1863,6 +1865,8 @@ return array_replace_recursive($base, [
         'placeholder_api_key' => 'Digite a chave de API',
         'placeholder_api_url' => 'Exemplo: https://api.openai.com',
         'limit_help' => '0 significa ilimitado',
+        'max_tokens_placeholder' => 'Deixe vazio para usar o padrão (:tokens)',
+        'max_tokens_help' => 'Máximo de tokens de saída para geração de artigos. Aplica-se apenas a modelos de chat. Deixe vazio para usar o padrão do sistema e evitar truncamento causado pelos padrões menores dos provedores.',
         'confirm_delete' => 'Excluir modelo ":name"?',
         'error' => [
             'required_fields' => 'Nome, chave de API e ID são obrigatórios',
