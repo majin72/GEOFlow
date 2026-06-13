@@ -2,6 +2,8 @@
 
 GEO 监测 sidecar（Chromium + noVNC + HTTP API）已并入主 Compose 栈，通过 **`geo-monitor` profile** 按需启用。未带该 profile 时，不会构建或启动 sidecar 容器。
 
+> **合规提醒**：GEO 监测是面向自有账号、自有品牌和低频研究场景的开源工具能力，不用于提供第三方平台数据转售、代采集或商业化监测服务。启用前请确认使用方式符合目标平台服务条款和适用法律法规；不得用于绕过验证码、规避风控、批量账号池、代理池滥用或大规模抓取。详见 [GEO 监测合规使用说明](./geo-monitoring-compliance.md)。
+
 ## 架构
 
 ```mermaid
@@ -178,6 +180,7 @@ docker compose --profile geo-monitor build --no-cache geo-monitor-sidecar
 
 ## 相关文档
 
+- [geo-monitoring-compliance.md](./geo-monitoring-compliance.md) — 合规使用边界与数据最小化建议
 - [geo-monitoring-novnc.md](./geo-monitoring-novnc.md) — noVNC 维护流程
 - [geo-monitoring-dual-runtime.md](./geo-monitoring-dual-runtime.md) — headed_desktop vs headless_linux
 - [deployment/DEPLOYMENT.md](./deployment/DEPLOYMENT.md) — 生产 Docker 总览

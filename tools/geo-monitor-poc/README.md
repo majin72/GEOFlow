@@ -1,16 +1,18 @@
 # GEO 引用度 POC（Stage 1）
 
-基于 [Scrapling](https://github.com/D4Vinci/Scrapling) 验证 **豆包 / DeepSeek / 腾讯元宝** 在登录态浏览器中的可采集性与引用抽取方式。
+基于 [Scrapling](https://github.com/D4Vinci/Scrapling) 验证 **豆包 / DeepSeek / 腾讯元宝** 在授权登录态、低频测试场景中的 GEO 引用观测与来源抽取方式。
 
-本目录是独立 POC，不接入 Laravel 队列；验证通过后再进入 sidecar 集成阶段。
+本目录是独立 POC，不接入 Laravel 队列；验证通过后再进入 sidecar 集成阶段。本工具仅用于自有账号、自有品牌和内部研究验证，不提供第三方平台数据转售、代采集或商业化监测服务。
+
+> **合规提醒**：使用前请阅读 [`docs/geo-monitoring-compliance.md`](../../docs/geo-monitoring-compliance.md)。请遵守目标平台服务条款和适用法律法规，不得用于绕过验证码、规避风控、批量账号池、代理池滥用、大规模抓取、转售数据或公开分发第三方平台回答正文/截图/HTML。
 
 ## 目标
 
 1. 人工登录后持久化 browser profile
-2. 自动发送测试问题
-3. 抽取回答文本与引用来源
-4. 保存截图 / HTML / JSON / Markdown 报告
-5. 输出三平台可采集性结论
+2. 低频发送自有品牌或研究用途的测试问题
+3. 抽取回答中的引用来源与必要统计信息
+4. 在调试或排障需要时保存截图 / HTML / JSON / Markdown 报告
+5. 输出三平台 GEO 引用观测结果
 
 ## 目录结构
 
@@ -46,7 +48,7 @@ cp accounts.sample.json accounts.json
 按需编辑 `accounts.json`：
 
 - `profile_dir`：每个账号独立目录
-- `proxy`：可选，格式 `http://user:pass@host:port`
+- `proxy`：可选，格式 `http://user:pass@host:port`。仅应使用自己有权使用的网络环境，不应使用代理池规避平台访问限制。
 
 ## 操作流程（推荐顺序）
 
@@ -244,9 +246,9 @@ profile 持久化在挂载卷 `profiles/doubao_guest/`，之后同一台机器�
 |------|------|
 | 无头报验证码 / 回答为空 | 重新跑 `captcha` 更新 profile |
 | 换 IP / 换机器 | 可能再次触发验证码，需重做方案 A 或 B |
-| 长期稳定采集 | 固定账号 + 固定 profile + 固定代理，低频请求 |
+| 长期低频观测 | 固定授权账号 + 固定 profile + 合规网络环境，低频请求 |
 
-**结论**：验证码无法在无头 Linux 里「自动跳过」，只能 **先在有界面环境过一次 → 保存 profile → 服务器无头复用**；失效后再人工更新 profile。
+**结论**：验证码无法在无头 Linux 里「自动跳过」，本项目也不提供自动破解或绕过验证码的能力。只能 **先在有界面环境人工处理 → 保存 profile → 服务器无头复用**；失效后再人工更新 profile。
 
 ---
 
@@ -316,9 +318,10 @@ POC 阶段可先用方案 A，验证通过后再做 Docker 化。
 ## 多账号 / 代理约定
 
 - 一个账号对应一个 `profile_dir`
-- 一个账号建议固定一个 `proxy`
+- 一个账号建议固定一个合规网络环境
 - 不要在同一 profile 里切换多个平台账号
 - probe 默认 `--delay-seconds 15`，避免触发频控
+- 不要使用批量账号池、代理池滥用或任何规避平台访问控制的方式运行本工具
 
 ## 常见问题
 
