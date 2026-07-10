@@ -102,18 +102,21 @@ RUN apt-get update \
         libzip-dev \
         postgresql-client \
         unzip \
-    && docker-php-ext-install \
-        mbstring \
-        opcache \
-        pcntl \
-        pdo_pgsql \
-        pdo_sqlite \
-        zip \
-    && curl -fsSL "https://pecl.php.net/get/redis-${PECL_REDIS_VERSION}.tgz" -o /tmp/redis.tgz \
+    && rm -rf /var/lib/apt/lists/*
+
+# opcache 已由官方 php-fpm 镜像内置；逐扩展分层安装，降低 Mac buildx 交叉编译 amd64 时 cc 段错误概率
+ENV MAKEFLAGS="-j1"
+
+RUN docker-php-ext-install -j1 mbstring
+RUN docker-php-ext-install -j1 pcntl
+RUN docker-php-ext-install -j1 pdo_pgsql
+RUN docker-php-ext-install -j1 pdo_sqlite
+RUN docker-php-ext-install -j1 zip
+
+RUN curl -fsSL "https://pecl.php.net/get/redis-${PECL_REDIS_VERSION}.tgz" -o /tmp/redis.tgz \
     && pecl install /tmp/redis.tgz \
     && docker-php-ext-enable redis \
-    && rm -f /tmp/redis.tgz \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -f /tmp/redis.tgz
 
 COPY docker/php/opcache.ini /usr/local/etc/php/conf.d/99-opcache.ini
 COPY docker/php/php-docker-overrides.ini /usr/local/etc/php/conf.d/99-overrides.ini
