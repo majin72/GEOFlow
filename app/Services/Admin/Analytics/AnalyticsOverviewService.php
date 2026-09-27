@@ -70,23 +70,29 @@ class AnalyticsOverviewService
     /**
      * @return array<string, int>
      */
-    public function kpis(AnalyticsFilter $filter): array
+    public function kpis(AnalyticsFilter $filter, bool $includeDistribution = true): array
     {
         $articles = $this->filteredArticles($filter);
         $published = $this->publishedArticlesBetween($filter, $filter->start(), $filter->end());
         $taskRuns = $this->filteredTaskRuns($filter);
-        $distributions = $this->filteredDistributions($filter);
-
-        return [
+        $kpis = [
             'articles' => (int) $articles->count(),
             'published' => (int) $published->count(),
             'running_tasks' => (int) (clone $taskRuns)->where('status', 'running')->count(),
             'failed_tasks' => (int) (clone $taskRuns)->where('status', 'failed')->count(),
-            'ai_calls' => (int) AiModel::query()->sum('used_today'),
-            'distribution_failed' => (int) (clone $distributions)->where('status', 'failed')->count(),
-            'distribution_pending' => (int) (clone $distributions)->whereIn('status', ['queued', 'sending'])->count(),
+            'ai_calls' => (int) AiModel::query()
+                ->forCurrentUsageDay()
+                ->sum('used_today'),
             'total_views' => $this->filteredViewCount($filter),
         ];
+
+        if ($includeDistribution) {
+            $distributions = $this->filteredDistributions($filter);
+            $kpis['distribution_failed'] = (int) (clone $distributions)->where('status', 'failed')->count();
+            $kpis['distribution_pending'] = (int) (clone $distributions)->whereIn('status', ['queued', 'sending'])->count();
+        }
+
+        return $kpis;
     }
 
     /**
@@ -95,15 +101,23 @@ class AnalyticsOverviewService
     public function publicationTrend(AnalyticsFilter $filter): array
     {
         $days = $this->days($filter);
+        $createdByDate = $this->baseArticleQuery($filter)
+            ->whereBetween('articles.created_at', [$filter->start(), $filter->end()])
+            ->selectRaw('DATE(articles.created_at) AS trend_date, COUNT(*) AS aggregate')
+            ->groupByRaw('DATE(articles.created_at)')
+            ->pluck('aggregate', 'trend_date');
+        $publishedByDate = $this->publishedArticlesBetween($filter, $filter->start(), $filter->end())
+            ->selectRaw('DATE(articles.published_at) AS trend_date, COUNT(*) AS aggregate')
+            ->groupByRaw('DATE(articles.published_at)')
+            ->pluck('aggregate', 'trend_date');
 
-        return array_map(function (Carbon $day) use ($filter): array {
-            $start = $day->copy()->startOfDay();
-            $end = $day->copy()->endOfDay();
+        return array_map(function (Carbon $day) use ($createdByDate, $publishedByDate): array {
+            $date = $day->toDateString();
 
             return [
-                'date' => $day->toDateString(),
-                'created' => (int) $this->filteredArticles($filter)->whereBetween('created_at', [$start, $end])->count(),
-                'published' => (int) $this->publishedArticlesBetween($filter, $start, $end)->count(),
+                'date' => $date,
+                'created' => (int) ($createdByDate[$date] ?? 0),
+                'published' => (int) ($publishedByDate[$date] ?? 0),
             ];
         }, $days);
     }
@@ -113,17 +127,26 @@ class AnalyticsOverviewService
      */
     public function taskTrend(AnalyticsFilter $filter): array
     {
-        return array_map(function (Carbon $day) use ($filter): array {
-            $start = $day->copy()->startOfDay();
-            $end = $day->copy()->endOfDay();
-            $base = $this->filteredTaskRuns($filter)->whereBetween('created_at', [$start, $end]);
+        $rows = $this->filteredTaskRuns($filter)
+            ->selectRaw('DATE(created_at) AS trend_date')
+            ->selectRaw("SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed")
+            ->selectRaw("SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed")
+            ->selectRaw("SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running")
+            ->selectRaw("SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending")
+            ->groupByRaw('DATE(created_at)')
+            ->get()
+            ->keyBy('trend_date');
+
+        return array_map(function (Carbon $day) use ($rows): array {
+            $date = $day->toDateString();
+            $row = $rows->get($date);
 
             return [
-                'date' => $day->toDateString(),
-                'completed' => (int) (clone $base)->where('status', 'completed')->count(),
-                'failed' => (int) (clone $base)->where('status', 'failed')->count(),
-                'running' => (int) (clone $base)->where('status', 'running')->count(),
-                'pending' => (int) (clone $base)->where('status', 'pending')->count(),
+                'date' => $date,
+                'completed' => (int) ($row->completed ?? 0),
+                'failed' => (int) ($row->failed ?? 0),
+                'running' => (int) ($row->running ?? 0),
+                'pending' => (int) ($row->pending ?? 0),
             ];
         }, $this->days($filter));
     }
@@ -232,15 +255,22 @@ class AnalyticsOverviewService
     public function aiUsageSummary(AnalyticsFilter $filter): array
     {
         return [
-            'used_today' => (int) AiModel::query()->sum('used_today'),
+            'used_today' => (int) AiModel::query()
+                ->forCurrentUsageDay()
+                ->sum('used_today'),
             'total_used' => (int) AiModel::query()->sum('total_used'),
             'active_models' => (int) AiModel::query()->where('status', 'active')->count(),
             'model_rows' => AiModel::query()
                 ->where('status', 'active')
-                ->orderByDesc('used_today')
-                ->select('id', 'name', 'model_id', 'model_type', 'used_today', 'total_used')
+                ->orderByRaw('CASE WHEN usage_date = ? THEN used_today ELSE 0 END DESC', [now()->toDateString()])
+                ->select('id', 'name', 'model_id', 'model_type', 'used_today', 'usage_date', 'total_used')
                 ->limit(5)
                 ->get()
+                ->map(function (AiModel $model): AiModel {
+                    $model->setAttribute('used_today', $model->currentUsage());
+
+                    return $model;
+                })
                 ->all(),
         ];
     }
@@ -392,15 +422,22 @@ class AnalyticsOverviewService
             'embedding_models' => (int) (clone $activeModels)
                 ->where('model_type', 'embedding')
                 ->count(),
-            'used_today' => (int) AiModel::query()->sum('used_today'),
+            'used_today' => (int) AiModel::query()
+                ->forCurrentUsageDay()
+                ->sum('used_today'),
             'total_used' => (int) AiModel::query()->sum('total_used'),
             'active_models' => AiModel::query()
                 ->where('status', 'active')
                 ->orderBy('failover_priority')
                 ->orderBy('id')
-                ->select('id', 'name', 'model_id', 'model_type', 'used_today', 'daily_limit')
+                ->select('id', 'name', 'model_id', 'model_type', 'used_today', 'usage_date', 'daily_limit')
                 ->limit(5)
                 ->get()
+                ->map(function (AiModel $model): AiModel {
+                    $model->setAttribute('used_today', $model->currentUsage());
+
+                    return $model;
+                })
                 ->all(),
         ];
     }
@@ -480,10 +517,12 @@ class AnalyticsOverviewService
             return 0;
         }
 
-        $query = DB::table('view_logs')->whereDate('created_at', $today);
-        if (Schema::hasColumn('view_logs', 'method')) {
-            $query->where('method', 'GET');
-        }
+        $query = DB::table('view_logs')
+            ->join('articles as a', 'view_logs.article_id', '=', 'a.id')
+            ->whereDate('view_logs.created_at', $today)
+            ->where('view_logs.method', 'GET')
+            ->whereIn('view_logs.source', AnalyticsLogFilter::supportedSources())
+            ->whereNull('a.deleted_at');
 
         return (int) $query->count();
     }
@@ -537,7 +576,10 @@ class AnalyticsOverviewService
             return (int) $this->filteredArticles($filter)->sum('view_count');
         }
 
-        return (int) $this->baseViewLogQuery($filter)->count();
+        return (int) $this->baseViewLogQuery($filter)
+            ->whereNotNull('view_logs.article_id')
+            ->whereNull('a.deleted_at')
+            ->count();
     }
 
     private function viewedArticleCount(AnalyticsFilter $filter): int
@@ -582,13 +624,9 @@ class AnalyticsOverviewService
             ->leftJoin('categories as c', 'a.category_id', '=', 'c.id')
             ->whereBetween('view_logs.created_at', [$filter->start(), $filter->end()]);
 
-        if (Schema::hasColumn('view_logs', 'method')) {
-            $query->where('view_logs.method', 'GET');
-        }
-
-        if (Schema::hasColumn('view_logs', 'source') && $filter->logSource !== 'all') {
-            $query->where('view_logs.source', $filter->logSource);
-        }
+        $query
+            ->where('view_logs.method', 'GET')
+            ->whereIn('view_logs.source', AnalyticsLogFilter::supportedSources());
 
         if ($filter->articleId !== null) {
             $query->where('view_logs.article_id', $filter->articleId);

@@ -8,8 +8,8 @@
 
 | 脚本 | 用途 |
 | --- | --- |
-| `geoflow-docker-deploy.sh` | 生产 Docker 一键部署脚本。会自检服务器、准备 `.env.prod`、部署 PostgreSQL、Redis、Web、App、队列、调度和 Reverb，并在最后执行健康检查。 |
-| `geoflow-healthcheck.sh` | 部署后健康检查脚本。可单独检查容器状态、Laravel 健康端点和数据库连接。 |
+| `geoflow-docker-deploy.sh` | 生产 Docker 首次空库一键部署脚本。会自检服务器、准备 `.env.prod`、部署 PostgreSQL、Redis、Web、App、常规队列、AI 质检队列、调度和 Reverb，并在最后执行健康检查。 |
+| `geoflow-healthcheck.sh` | 部署后健康检查脚本。可单独检查全部必需容器、Laravel 健康端点和数据库连接。 |
 | `start-docker-pull-tunnel.sh` | **本机 Mac**：SSH 反向隧道，把 Clash HTTP 代理暴露给 ECS。 |
 | `pull-images-once-via-tunnel.sh` | **ECS 一次性拉镜像**：经隧道 + `skopeo`，**不重启 docker**，不影响运行中容器。 |
 | `build-once-via-tunnel.sh` | **ECS 一次性 build**：临时代理仅作用于本次 `docker compose build`，**不重启 docker**。 |
@@ -35,12 +35,14 @@
 
 ## 一键部署
 
-在新服务器执行：
+仅在全新空数据库的服务器执行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yaojingang/GEOFlow/main/deploy-scripts/geoflow-docker-deploy.sh -o geoflow-docker-deploy.sh
 bash geoflow-docker-deploy.sh
 ```
+
+已有数据的实例禁止使用该脚本升级，也禁止滚动升级。请执行 `docs/deployment/DEPLOYMENT.md` 3.1 节的 down、停止并排空全部旧进程和在途请求、一次性确认、迁移、全量启动新版本、readiness、启用删除门禁流程。
 
 脚本会要求确认：
 
@@ -82,7 +84,8 @@ bash geoflow-docker-deploy.sh
 | `GEOFLOW_INSTALL_DOCKER` | `auto` | `1` 自动安装 Docker；`0` 缺少 Docker 时直接失败 |
 | `GEOFLOW_DB_PASSWORD` | 随机生成 | PostgreSQL 密码 |
 | `GEOFLOW_REDIS_PASSWORD` | 随机生成 | Redis 密码 |
-| `GEOFLOW_TRUSTED_PROXIES` | `*` | 反向代理、CDN、二级目录部署时的可信代理设置 |
+| `GEOFLOW_TRUSTED_PROXIES` | 留空 | 反向代理、CDN、二级目录部署时填写实际代理 IP/CIDR |
+| `GEOFLOW_SESSION_SECURE_COOKIE` | 根据 `APP_URL` 协议自动设置 | HTTPS 为 `true`；直接 HTTP 访问为 `false` |
 | `GEOFLOW_SELF_DELETE` | `0` | 设置为 `1` 时，部署成功后删除当前执行的部署脚本 |
 
 ## 执行后自删除
@@ -116,7 +119,7 @@ https://example.com/wiki
 
 ```env
 APP_URL=https://example.com/wiki
-TRUSTED_PROXIES=*
+TRUSTED_PROXIES=203.0.113.10
 ADMIN_BASE_PATH=geo_admin
 ```
 
@@ -143,7 +146,7 @@ This folder contains reference scripts for technical operators who want a faster
 
 | Script | Purpose |
 | --- | --- |
-| `geoflow-docker-deploy.sh` | Production Docker one-click deployment. It checks the server, prepares `.env.prod`, deploys PostgreSQL, Redis, web, app, queue, scheduler and Reverb, then runs a healthcheck. |
+| `geoflow-docker-deploy.sh` | First install on a fresh empty production database. It checks the server, prepares `.env.prod`, deploys PostgreSQL, Redis, web, app, queue, scheduler and Reverb, then runs a healthcheck. |
 | `geoflow-healthcheck.sh` | Post-deployment healthcheck. It validates Docker Compose services, the Laravel health endpoint and database connectivity. |
 
 ## Recommended Server Profile
@@ -164,14 +167,16 @@ Recommended for production:
 - Reverse proxy or cloud load balancer for HTTPS
 - PostgreSQL and Redis ports not exposed to the public Internet
 
-## One-Command Deployment
+## One-Command First Install
 
-On a fresh server, run:
+On a fresh server with an empty database, run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yaojingang/GEOFlow/main/deploy-scripts/geoflow-docker-deploy.sh -o geoflow-docker-deploy.sh
 bash geoflow-docker-deploy.sh
 ```
+
+Do not use this script to upgrade an existing deployment, and do not perform a rolling upgrade. Follow the stopped-and-drained upgrade protocol in section 3.1 of `docs/deployment/DEPLOYMENT.md`.
 
 The script will ask for:
 
@@ -213,7 +218,8 @@ Optional variables:
 | `GEOFLOW_INSTALL_DOCKER` | `auto` | `1` to install Docker automatically, `0` to fail if Docker is missing |
 | `GEOFLOW_DB_PASSWORD` | random | PostgreSQL password |
 | `GEOFLOW_REDIS_PASSWORD` | random | Redis password |
-| `GEOFLOW_TRUSTED_PROXIES` | `*` | Trusted proxy setting for reverse proxy/CDN/subdirectory deployments |
+| `GEOFLOW_TRUSTED_PROXIES` | empty | Set to the actual proxy IP/CIDR for reverse proxy/CDN/subdirectory deployments |
+| `GEOFLOW_SESSION_SECURE_COOKIE` | derived from `APP_URL` | `true` for HTTPS and `false` for direct HTTP access |
 | `GEOFLOW_SELF_DELETE` | `0` | Set to `1` to remove the deployment script after a successful deployment |
 
 ## Self-Delete Mode
@@ -247,7 +253,7 @@ Use:
 
 ```env
 APP_URL=https://example.com/wiki
-TRUSTED_PROXIES=*
+TRUSTED_PROXIES=203.0.113.10
 ADMIN_BASE_PATH=geo_admin
 ```
 

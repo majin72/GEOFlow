@@ -2,16 +2,23 @@
 
 namespace App\Services\GeoFlow;
 
+use App\Exceptions\DistributionAcknowledgedResponseException;
 use App\Models\ArticleDistribution;
 use App\Models\DistributionChannel;
 use App\Models\DistributionChannelSecret;
+use App\Services\Outbound\SafeOutboundHttpClient;
+use App\Support\Site\ArticlePermalinkPolicy;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Response;
-use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
 class DistributionHttpClient
 {
-    public function __construct(private readonly DistributionSigningService $signingService) {}
+    public function __construct(
+        private readonly DistributionSigningService $signingService,
+        private readonly SafeOutboundHttpClient $safeHttp,
+        private readonly Factory $http,
+    ) {}
 
     /**
      * @param  array<string,mixed>  $payload
@@ -88,7 +95,7 @@ class DistributionHttpClient
         $channel->loadMissing('activeSecret');
         $body = '{}';
         $path = '/geoflow-agent/v1/health';
-        $request = Http::timeout(10)->connectTimeout(3)->acceptJson();
+        $request = $this->http->timeout(10)->connectTimeout(3)->acceptJson();
         if ($channel->activeSecret) {
             $request = $request->withHeaders($this->signingService->headers(
                 $channel->activeSecret,
@@ -101,10 +108,10 @@ class DistributionHttpClient
         }
 
         $endpoint = $this->endpoint($channel, $path);
-        $response = $request->get($endpoint);
+        $response = $this->safeHttp->get($request, $endpoint, $this->jsonMaxBytes());
         if ($response->status() === 404 && $this->canUseIndexPhpFallback($channel)) {
             $fallbackEndpoint = $this->indexPhpEndpoint($channel, $path);
-            $fallbackResponse = $request->get($fallbackEndpoint);
+            $fallbackResponse = $this->safeHttp->get($request, $fallbackEndpoint, $this->jsonMaxBytes());
             if (! $fallbackResponse->failed()) {
                 $json = $fallbackResponse->json();
                 $result = is_array($json) ? $json : ['ok' => true];
@@ -115,7 +122,7 @@ class DistributionHttpClient
         }
 
         if ($response->failed()) {
-            throw new DistributionHttpException($this->failureMessage('目标站健康检查', $response, $endpoint), $response->status(), $endpoint);
+            throw new DistributionHttpException($this->failureMessage('目标站健康检查', $response), $response->status());
         }
 
         $json = $response->json();
@@ -149,7 +156,7 @@ class DistributionHttpClient
     /**
      * @return array<string,mixed>
      */
-    public function syncSiteSettings(DistributionChannel $channel): array
+    public function syncSiteSettings(DistributionChannel $channel, ?string $idempotencyKey = null, ?array $settings = null): array
     {
         $channel->loadMissing('activeSecret');
         $secret = $channel->activeSecret;
@@ -158,10 +165,27 @@ class DistributionHttpClient
         }
 
         $path = '/geoflow-agent/v1/site-settings';
+        $settings ??= $channel->targetSiteSettingsPayload();
+        $policy = ArticlePermalinkPolicy::fromRaw($settings[ArticlePermalinkPolicy::SETTING_KEY] ?? null);
+        $capabilities = $channel->frontendCapabilitiesCache();
+        if ($policy->currentPattern !== ArticlePermalinkPolicy::DEFAULT_PATTERN
+            && (! $capabilities['supports_article_permalink_policy']
+                || ! in_array(1, $capabilities['article_permalink_schema_versions'], true))) {
+            throw new RuntimeException(__('article_permalink.errors.agent_capability_required'));
+        }
 
-        return $this->sendChannelSignedJson($channel, $secret, $path, 'site.settings.update', 'site-settings-channel-'.(int) $channel->id.'-'.time(), [
-            'settings' => $channel->targetSiteSettingsPayload(),
+        $result = $this->sendChannelSignedJson($channel, $secret, $path, 'site.settings.update', $idempotencyKey ?: 'site-settings-channel-'.(int) $channel->id.'-'.time(), [
+            'settings' => $settings,
+            'expected_article_permalink_revision' => (int) $capabilities['current_article_permalink_revision'],
         ], '目标站点设置同步');
+
+        if (isset($result['article_permalink_revision'])) {
+            $capabilities['current_article_permalink_revision'] = max(0, (int) $result['article_permalink_revision']);
+            $capabilities['current_article_permalink_pattern'] = trim((string) ($result['article_permalink_pattern'] ?? $policy->currentPattern));
+            $channel->fillFrontendCapabilitiesCache($capabilities)->save();
+        }
+
+        return $result;
     }
 
     /**
@@ -177,36 +201,34 @@ class DistributionHttpClient
 
         $endpoint = $this->endpoint($channel, $path);
         $response = $this->postSignedJson($secret, $endpoint, $path, $body, $event, $idempotencyKey, 30);
-        $failedEndpoint = $endpoint;
-        $failedResponse = $response;
-
+        $resolvedEndpoint = null;
         if ($response->status() === 404 && $this->canUseIndexPhpFallback($channel)) {
             $fallbackBaseUrl = $this->indexPhpBaseUrl($channel);
-            $fallbackEndpoint = $this->indexPhpEndpoint($channel, $path);
-            $fallbackResponse = $this->postSignedJson($secret, $fallbackEndpoint, $path, $body, $event, $idempotencyKey, 30);
-            $failedEndpoint = $fallbackEndpoint;
-            $failedResponse = $fallbackResponse;
-
+            $fallbackResponse = $this->postSignedJson($secret, $this->indexPhpEndpoint($channel, $path), $path, $body, $event, $idempotencyKey, 30);
+            $response = $fallbackResponse;
             if (! $fallbackResponse->failed()) {
-                $channel->forceFill(['endpoint_url' => $fallbackBaseUrl])->save();
-                $secret->forceFill(['last_used_at' => now()])->save();
-
-                return $this->decodeJson($fallbackResponse);
+                $resolvedEndpoint = $fallbackBaseUrl;
             }
         }
-
-        $secret->forceFill(['last_used_at' => now()])->save();
-
-        if ($failedResponse->failed()) {
-            throw new DistributionHttpException($this->failureMessage($operation, $failedResponse, $failedEndpoint), $failedResponse->status(), $failedEndpoint);
+        if ($response->failed()) {
+            throw new DistributionHttpException($this->failureMessage($operation, $response), $response->status());
+        }
+        $result = $this->decodeJson($response);
+        try {
+            if ($resolvedEndpoint !== null) {
+                $channel->forceFill(['endpoint_url' => $resolvedEndpoint])->save();
+            }
+            $secret->forceFill(['last_used_at' => now()])->save();
+        } catch (\Throwable $exception) {
+            throw new DistributionAcknowledgedResponseException($result, $exception);
         }
 
-        return $this->decodeJson($response);
+        return $result;
     }
 
     private function postSignedJson(DistributionChannelSecret $secret, string $endpoint, string $path, string $body, string $event, string $idempotencyKey, int $timeout): Response
     {
-        return Http::timeout($timeout)
+        $request = $this->http->timeout($timeout)
             ->connectTimeout(5)
             ->withHeaders($this->signingService->headers(
                 $secret,
@@ -216,8 +238,9 @@ class DistributionHttpClient
                 $event,
                 $idempotencyKey
             ))
-            ->withBody($body, 'application/json')
-            ->post($endpoint);
+            ->withBody($body, 'application/json');
+
+        return $this->safeHttp->send($request, 'POST', $endpoint, [], $this->jsonMaxBytes());
     }
 
     /**
@@ -226,7 +249,7 @@ class DistributionHttpClient
     private function signedGetJson(DistributionChannel $channel, DistributionChannelSecret $secret, string $path, string $event, string $idempotencyKey, string $operation): array
     {
         $body = '{}';
-        $request = Http::timeout(10)
+        $request = $this->http->timeout(10)
             ->connectTimeout(3)
             ->acceptJson()
             ->withHeaders($this->signingService->headers(
@@ -239,14 +262,12 @@ class DistributionHttpClient
             ));
 
         $endpoint = $this->endpoint($channel, $path);
-        $response = $request->get($endpoint);
-        $failedEndpoint = $endpoint;
+        $response = $this->safeHttp->get($request, $endpoint, $this->jsonMaxBytes());
         $failedResponse = $response;
 
         if ($response->status() === 404 && $this->canUseIndexPhpFallback($channel)) {
             $fallbackEndpoint = $this->indexPhpEndpoint($channel, $path);
-            $fallbackResponse = $request->get($fallbackEndpoint);
-            $failedEndpoint = $fallbackEndpoint;
+            $fallbackResponse = $this->safeHttp->get($request, $fallbackEndpoint, $this->jsonMaxBytes());
             $failedResponse = $fallbackResponse;
 
             if (! $fallbackResponse->failed()) {
@@ -258,7 +279,7 @@ class DistributionHttpClient
         }
 
         if ($failedResponse->failed()) {
-            throw new DistributionHttpException($this->failureMessage($operation, $failedResponse, $failedEndpoint), $failedResponse->status(), $failedEndpoint);
+            throw new DistributionHttpException($this->failureMessage($operation, $failedResponse), $failedResponse->status());
         }
 
         return $this->decodeJson($response);
@@ -272,6 +293,11 @@ class DistributionHttpClient
         $json = $response->json();
 
         return is_array($json) ? $json : ['ok' => true];
+    }
+
+    private function jsonMaxBytes(): int
+    {
+        return (int) config('geoflow.outbound_json_max_bytes', 4 * 1024 * 1024);
     }
 
     private function endpoint(DistributionChannel $channel, string $path): string
@@ -294,30 +320,17 @@ class DistributionHttpClient
         return $this->indexPhpBaseUrl($channel).$path;
     }
 
-    private function failureMessage(string $operation, Response $response, string $endpoint): string
+    private function failureMessage(string $operation, Response $response): string
     {
         $status = $response->status();
         if ($status === 404) {
-            return '目标站 Agent 接口未找到（请求地址：'.$endpoint.'）。请先在渠道详情页下载“目标站点包”，上传解压到目标站，并确认 Web 服务器入口指向站点包的 public/index.php；如果部署在二级目录，请把 Agent 基础地址填写为包含该目录的入口地址。';
+            return '目标站 Agent 接口未找到。请先在渠道详情页下载“目标站点包”，上传解压到目标站，并确认 Web 服务器入口指向站点包的 public/index.php；如果部署在二级目录，请把 Agent 基础地址填写为包含该目录的入口地址。';
         }
 
         if (in_array($status, [401, 403], true)) {
             return $operation.'失败：HTTP '.$status.'，目标站 Agent 鉴权未通过。请确认密钥 ID 和密钥明文已写入目标站点包配置，并且渠道密钥没有被重置。';
         }
 
-        $body = $this->summarizeResponseBody($response->body());
-
-        return $operation.'失败：HTTP '.$status.($body !== '' ? ' '.$body : '');
-    }
-
-    private function summarizeResponseBody(string $body): string
-    {
-        $plain = html_entity_decode(strip_tags($body), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $plain = preg_replace('/\s+/', ' ', trim($plain));
-        if (! is_string($plain) || $plain === '') {
-            return '';
-        }
-
-        return mb_strlen($plain) > 300 ? mb_substr($plain, 0, 300).'...' : $plain;
+        return $operation.'失败：HTTP '.$status;
     }
 }

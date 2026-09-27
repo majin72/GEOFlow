@@ -6,9 +6,16 @@ use App\Http\Controllers\Controller;
 use App\Models\LeadForm;
 use App\Models\SiteSetting;
 use App\Services\Admin\SiteThemeReplicationService;
+use App\Services\AiWorkspace\AiWorkspaceRuntimeStatus;
+use App\Services\Api\ManagementSiteQuery;
+use App\Services\Site\ArticlePermalinkService;
+use App\Services\Site\SiteAppearanceService;
 use App\Support\AdminBasePathManager;
 use App\Support\AdminWeb;
+use App\Support\Site\ArticlePermalinkPolicy;
 use App\Support\Site\ArticleTextAdPicker;
+use App\Support\Site\CtaTargetUrlNormalizer;
+use App\Support\Site\FriendLinkSettings;
 use App\Support\Site\HomepageModuleBuilder;
 use App\Support\Site\SiteSettingsBag;
 use App\Support\Site\SiteThemeCatalog;
@@ -31,26 +38,64 @@ class SiteSettingsController extends Controller
 {
     public function __construct(
         private readonly SiteThemeCatalog $siteThemeCatalog,
-        private readonly SiteThemeReplicationService $themeReplicationService
+        private readonly SiteThemeReplicationService $themeReplicationService,
+        private readonly ArticlePermalinkService $articlePermalinks,
     ) {}
 
     /**
      * 网站设置页面。
      */
-    public function index(): View
-    {
+    public function index(
+        FriendLinkSettings $friendLinkSettings,
+        AiWorkspaceRuntimeStatus $aiWorkspaceRuntimeStatus,
+    ): View {
         $settings = $this->loadSettings();
+        $canManageProtectedWorkflows = auth('admin')->user()?->canManageProtectedWorkflows() === true;
+        $availableThemes = $this->siteThemeCatalog->all();
+        $articlePermalinkPolicy = $this->articlePermalinks->policy();
+        $activeTheme = collect($availableThemes)->firstWhere('id', (string) ($settings['active_theme'] ?? ''));
 
         return view('admin.site-settings.index', [
             'pageTitle' => __('admin.site_settings.page_title'),
             'activeMenu' => 'site_settings',
             'adminSiteName' => AdminWeb::siteName(),
             'settings' => $settings,
-            'canEditAnalytics' => auth('admin')->user()?->isSuperAdmin() === true,
-            'availableThemes' => $this->siteThemeCatalog->all(),
-            'recentThemeReplications' => $this->themeReplicationService->recent(3),
-            'themeReplicationDeployment' => $this->themeReplicationService->deploymentDiagnostics(),
+            'appearanceRevision' => $settings['_appearance_revision'],
+            'canEditAnalytics' => $canManageProtectedWorkflows,
+            'canManageProtectedWorkflows' => $canManageProtectedWorkflows,
+            'availableThemes' => $availableThemes,
+            'recentThemeReplications' => $canManageProtectedWorkflows
+                ? $this->themeReplicationService->recent(3)
+                : collect(),
             'homeCarouselSlides' => $this->parseHomeCarouselSlides((string) ($settings['home_carousel_slides'] ?? '[]')),
+            'homepageEditorPage' => false,
+            'friendLinkSnapshot' => $friendLinkSettings->snapshot(),
+            'homepageModuleCount' => count($this->parseHomepageModules((string) ($settings['homepage_modules'] ?? '[]'))),
+            'articleDetailAds' => $this->parseArticleDetailAds((string) ($settings['article_detail_ads'] ?? '[]')),
+            'articleDetailTextAds' => $this->parseArticleDetailTextAds((string) ($settings['article_detail_text_ads'] ?? '[]')),
+            'articlePermalinkPolicy' => $articlePermalinkPolicy,
+            'articlePermalinkPresets' => ArticlePermalinkPolicy::PRESETS,
+            'articlePermalinkPreview' => session('article_permalink_preview'),
+            'aiWorkspaceRuntime' => $aiWorkspaceRuntimeStatus->snapshot(),
+            'articlePermalinkInstalledThemeWarning' => $articlePermalinkPolicy->currentPattern !== ArticlePermalinkPolicy::DEFAULT_PATTERN
+                && ($activeTheme['source'] ?? null) === 'installed',
+        ]);
+    }
+
+    /**
+     * 独立的首页模块编排页面。
+     */
+    public function editHomepageModules(): View
+    {
+        $settings = $this->loadSettings();
+
+        return view('admin.site-settings.index', [
+            'pageTitle' => __('admin.site_settings.homepage.page_title'),
+            'activeMenu' => 'site_settings',
+            'adminSiteName' => AdminWeb::siteName(),
+            'settings' => $settings,
+            'appearanceRevision' => $settings['_appearance_revision'],
+            'homepageEditorPage' => true,
             'homepageModules' => $this->parseHomepageModules((string) ($settings['homepage_modules'] ?? '[]')),
             'homepageStyle' => $this->parseHomepageStyle((string) ($settings['homepage_style'] ?? '{}')),
             'homepageModuleTypes' => HomepageModuleBuilder::TYPES,
@@ -63,8 +108,6 @@ class SiteSettingsController extends Controller
             'homepageAlignments' => HomepageModuleBuilder::ALIGNMENTS,
             'homepagePresets' => HomepageModuleBuilder::presetIds(),
             'homepagePresetModes' => HomepageModuleBuilder::presetModes(),
-            'articleDetailAds' => $this->parseArticleDetailAds((string) ($settings['article_detail_ads'] ?? '[]')),
-            'articleDetailTextAds' => $this->parseArticleDetailTextAds((string) ($settings['article_detail_text_ads'] ?? '[]')),
         ]);
     }
 
@@ -91,6 +134,8 @@ class SiteSettingsController extends Controller
             'site_description' => ['nullable', 'string'],
             'site_keywords' => ['nullable', 'string', 'max:500'],
             'copyright_info' => ['nullable', 'string', 'max:500'],
+            'filing_info' => ['nullable', 'string', 'max:255'],
+            'filing_url' => ['nullable', 'url:http,https', 'max:500'],
             'site_logo' => ['nullable', 'url', 'max:500'],
             'site_favicon' => ['nullable', 'url', 'max:500'],
             'analytics_code' => ['nullable', 'string'],
@@ -122,8 +167,11 @@ class SiteSettingsController extends Controller
 
         try {
             $newAdminBasePath = AdminBasePathManager::normalize((string) $payload['admin_base_path']);
+            $this->articlePermalinks->assertAdminBasePathCompatible($newAdminBasePath);
         } catch (\Throwable) {
-            return back()->withErrors(['admin_base_path' => __('admin.site_settings.error.admin_base_path_invalid')])->withInput();
+            return back()->withErrors([
+                'admin_base_path' => __('article_permalink.errors.admin_path_conflict'),
+            ])->withInput();
         }
 
         $currentAdminBasePath = AdminWeb::basePath();
@@ -137,6 +185,8 @@ class SiteSettingsController extends Controller
             'site_description' => trim((string) ($payload['site_description'] ?? '')),
             'site_keywords' => trim((string) ($payload['site_keywords'] ?? '')),
             'copyright_info' => trim((string) ($payload['copyright_info'] ?? '')),
+            'filing_info' => trim((string) ($payload['filing_info'] ?? '')),
+            'filing_url' => trim((string) ($payload['filing_url'] ?? '')),
             'site_logo' => trim((string) ($payload['site_logo'] ?? '')),
             'site_favicon' => trim((string) ($payload['site_favicon'] ?? '')),
             'analytics_code' => $canEditAnalytics
@@ -150,12 +200,7 @@ class SiteSettingsController extends Controller
             'admin_base_path' => $newAdminBasePath,
         ];
 
-        foreach ($settings as $settingKey => $settingValue) {
-            SiteSetting::query()->updateOrCreate(
-                ['setting_key' => $settingKey],
-                ['setting_value' => $settingValue]
-            );
-        }
+        app(SiteAppearanceService::class)->saveValidated($settings, $this->appearanceRevision($request));
 
         SiteSettingsBag::forget();
 
@@ -191,10 +236,12 @@ class SiteSettingsController extends Controller
             return back()->withErrors(__('admin.site_settings.theme.invalid_selection'));
         }
 
-        SiteSetting::query()->updateOrCreate(
-            ['setting_key' => 'active_theme'],
-            ['setting_value' => $selectedTheme]
-        );
+        $theme = collect($this->siteThemeCatalog->all())->firstWhere('id', $selectedTheme);
+        if (($theme['source'] ?? '') === 'installed') {
+            abort_unless($request->user('admin')?->canManageProtectedWorkflows(), 403);
+        }
+
+        app(SiteAppearanceService::class)->saveValidated(['active_theme' => $selectedTheme], $this->appearanceRevision($request));
 
         SiteSettingsBag::forget();
 
@@ -219,18 +266,14 @@ class SiteSettingsController extends Controller
         $style = HomepageModuleBuilder::normalizeStyle($postedStyle);
         $modules = HomepageModuleBuilder::normalizeModules($postedModules, false, HomepageModuleBuilder::MAX_MODULES);
 
-        SiteSetting::query()->updateOrCreate(
-            ['setting_key' => 'homepage_style'],
-            ['setting_value' => (string) json_encode($style, JSON_UNESCAPED_UNICODE)]
-        );
-        SiteSetting::query()->updateOrCreate(
-            ['setting_key' => 'homepage_modules'],
-            ['setting_value' => (string) json_encode($modules, JSON_UNESCAPED_UNICODE)]
-        );
+        app(SiteAppearanceService::class)->saveValidated([
+            'homepage_style' => (string) json_encode($style, JSON_UNESCAPED_UNICODE),
+            'homepage_modules' => (string) json_encode($modules, JSON_UNESCAPED_UNICODE),
+        ], $this->appearanceRevision($request));
 
         SiteSettingsBag::forget();
 
-        return redirect()->route('admin.site-settings.index')->with('message', __('admin.site_settings.homepage.message.saved'));
+        return redirect()->route('admin.site-settings.homepage-modules.edit')->with('message', __('admin.site_settings.homepage.message.saved'));
     }
 
     /**
@@ -259,18 +302,14 @@ class SiteSettingsController extends Controller
             );
         }
 
-        SiteSetting::query()->updateOrCreate(
-            ['setting_key' => 'homepage_style'],
-            ['setting_value' => (string) json_encode($style, JSON_UNESCAPED_UNICODE)]
-        );
-        SiteSetting::query()->updateOrCreate(
-            ['setting_key' => 'homepage_modules'],
-            ['setting_value' => (string) json_encode($modules, JSON_UNESCAPED_UNICODE)]
-        );
+        app(SiteAppearanceService::class)->saveValidated([
+            'homepage_style' => (string) json_encode($style, JSON_UNESCAPED_UNICODE),
+            'homepage_modules' => (string) json_encode($modules, JSON_UNESCAPED_UNICODE),
+        ], $this->appearanceRevision($request));
 
         SiteSettingsBag::forget();
 
-        return redirect()->route('admin.site-settings.index')->with('message', __('admin.site_settings.homepage.message.preset_applied'));
+        return redirect()->route('admin.site-settings.homepage-modules.edit')->with('message', __('admin.site_settings.homepage.message.preset_applied'));
     }
 
     /**
@@ -313,18 +352,14 @@ class SiteSettingsController extends Controller
             );
         }
 
-        SiteSetting::query()->updateOrCreate(
-            ['setting_key' => 'homepage_style'],
-            ['setting_value' => (string) json_encode($style, JSON_UNESCAPED_UNICODE)]
-        );
-        SiteSetting::query()->updateOrCreate(
-            ['setting_key' => 'homepage_modules'],
-            ['setting_value' => (string) json_encode($modules, JSON_UNESCAPED_UNICODE)]
-        );
+        app(SiteAppearanceService::class)->saveValidated([
+            'homepage_style' => (string) json_encode($style, JSON_UNESCAPED_UNICODE),
+            'homepage_modules' => (string) json_encode($modules, JSON_UNESCAPED_UNICODE),
+        ], $this->appearanceRevision($request));
 
         SiteSettingsBag::forget();
 
-        return redirect()->route('admin.site-settings.index')->with('message', __('admin.site_settings.homepage.message.imported'));
+        return redirect()->route('admin.site-settings.homepage-modules.edit')->with('message', __('admin.site_settings.homepage.message.imported'));
     }
 
     /**
@@ -348,11 +383,12 @@ class SiteSettingsController extends Controller
             $title = trim((string) ($postedAd['title'] ?? ''));
             $copy = trim((string) ($postedAd['copy'] ?? ''));
             $buttonText = trim((string) ($postedAd['button_text'] ?? ''));
-            $buttonUrl = $this->normalizeCtaTargetUrl((string) ($postedAd['button_url'] ?? ''));
+            $rawButtonUrl = trim((string) ($postedAd['button_url'] ?? ''));
+            $buttonUrl = CtaTargetUrlNormalizer::normalize($rawButtonUrl);
             $enabled = ! empty($postedAd['enabled']);
             $id = trim((string) ($postedAd['id'] ?? ''));
 
-            if ($name === '' && $badge === '' && $title === '' && $copy === '' && $buttonText === '' && $buttonUrl === '') {
+            if ($name === '' && $badge === '' && $title === '' && $copy === '' && $buttonText === '' && $rawButtonUrl === '') {
                 continue;
             }
 
@@ -372,10 +408,7 @@ class SiteSettingsController extends Controller
             ];
         }
 
-        SiteSetting::query()->updateOrCreate(
-            ['setting_key' => 'article_detail_ads'],
-            ['setting_value' => (string) json_encode($ads, JSON_UNESCAPED_UNICODE)]
-        );
+        app(SiteAppearanceService::class)->saveValidated(['article_detail_ads' => (string) json_encode($ads, JSON_UNESCAPED_UNICODE)], $this->appearanceRevision($request));
 
         SiteSettingsBag::forget();
 
@@ -394,10 +427,7 @@ class SiteSettingsController extends Controller
 
         $modules = $this->normalizePostedArticleTextAdModules($postedModules);
 
-        SiteSetting::query()->updateOrCreate(
-            ['setting_key' => 'article_detail_text_ads'],
-            ['setting_value' => (string) json_encode($modules, JSON_UNESCAPED_UNICODE)]
-        );
+        app(SiteAppearanceService::class)->saveValidated(['article_detail_text_ads' => (string) json_encode($modules, JSON_UNESCAPED_UNICODE)], $this->appearanceRevision($request));
 
         SiteSettingsBag::forget();
 
@@ -411,6 +441,8 @@ class SiteSettingsController extends Controller
      *   site_description:string,
      *   site_keywords:string,
      *   copyright_info:string,
+     *   filing_info:string,
+     *   filing_url:string,
      *   site_logo:string,
      *   site_favicon:string,
      *   analytics_code:string,
@@ -435,6 +467,8 @@ class SiteSettingsController extends Controller
             'site_description' => '基于AI的智能内容生成与发布平台',
             'site_keywords' => 'AI内容生成,GEO优化,智能发布,内容管理',
             'copyright_info' => '© 2026 GEOFlow. All rights reserved.',
+            'filing_info' => '',
+            'filing_url' => 'https://beian.miit.gov.cn/',
             'site_logo' => '',
             'site_favicon' => '',
             'analytics_code' => '',
@@ -451,12 +485,14 @@ class SiteSettingsController extends Controller
             'article_detail_text_ads' => '[]',
         ];
 
-        $stored = SiteSetting::query()
+        $appearanceFields = array_merge(ManagementSiteQuery::PUBLIC_FIELDS, ['site_title']);
+        $stored = SiteSetting::query()->useWritePdo()
             ->select(['setting_key', 'setting_value'])
-            ->whereIn('setting_key', array_keys($defaults))
+            ->whereIn('setting_key', array_unique(array_merge(array_keys($defaults), $appearanceFields)))
             ->get()
             ->pluck('setting_value', 'setting_key')
             ->all();
+        $appearanceRevision = app(SiteAppearanceService::class)->hash(array_intersect_key($stored, array_flip($appearanceFields)));
 
         foreach ($defaults as $key => $defaultValue) {
             if (! array_key_exists($key, $stored)) {
@@ -465,11 +501,14 @@ class SiteSettingsController extends Controller
         }
 
         return [
+            '_appearance_revision' => $appearanceRevision,
             'site_name' => (string) $stored['site_name'],
             'site_subtitle' => (string) $stored['site_subtitle'],
             'site_description' => (string) $stored['site_description'],
             'site_keywords' => (string) $stored['site_keywords'],
             'copyright_info' => (string) $stored['copyright_info'],
+            'filing_info' => (string) $stored['filing_info'],
+            'filing_url' => (string) $stored['filing_url'],
             'site_logo' => (string) $stored['site_logo'],
             'site_favicon' => (string) $stored['site_favicon'],
             'analytics_code' => (string) $stored['analytics_code'],
@@ -891,7 +930,7 @@ class SiteSettingsController extends Controller
 
             $imageUrl = $this->normalizePublicImageUrl((string) ($postedSlide['image_url'] ?? ''));
             $title = trim((string) ($postedSlide['title'] ?? ''));
-            $linkUrl = $this->normalizeCtaTargetUrl((string) ($postedSlide['link_url'] ?? ''));
+            $linkUrl = CtaTargetUrlNormalizer::normalize((string) ($postedSlide['link_url'] ?? ''));
             $enabled = ! empty($postedSlide['enabled']);
 
             if ($imageUrl === '' && $title === '' && $linkUrl === '') {
@@ -936,27 +975,6 @@ class SiteSettingsController extends Controller
         }
 
         return '';
-    }
-
-    /**
-     * 归一化广告按钮链接，兼容相对路径与完整 URL。
-     */
-    private function normalizeCtaTargetUrl(string $url): string
-    {
-        $normalized = trim($url);
-        if ($normalized === '') {
-            return '';
-        }
-
-        if (str_starts_with($normalized, '/')) {
-            return $normalized;
-        }
-
-        if (preg_match('#^https?://#i', $normalized) === 1) {
-            return $normalized;
-        }
-
-        return '/'.ltrim($normalized, '/');
     }
 
     /**
@@ -1013,5 +1031,10 @@ class SiteSettingsController extends Controller
             && ! str_contains($trackingParam, '://')
             && ! str_starts_with($trackingParam, '/')
             && preg_match('/^[A-Za-z0-9._~%=&+;,:@-]+$/', $trackingParam) === 1;
+    }
+
+    private function appearanceRevision(Request $request): ?string
+    {
+        return $request->validate(['appearance_revision' => ['sometimes', 'string', 'regex:/^[a-f0-9]{64}$/D']])['appearance_revision'] ?? null;
     }
 }

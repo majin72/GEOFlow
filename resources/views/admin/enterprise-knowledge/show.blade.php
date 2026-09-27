@@ -3,6 +3,7 @@
 @php
     $vditorLocaleMap = [
         'zh_CN' => 'zh_CN',
+        'zh_TW' => 'zh_TW',
         'en' => 'en_US',
         'en_US' => 'en_US',
         'ja' => 'ja_JP',
@@ -137,7 +138,7 @@
     <div class="enterprise-knowledge-workspace px-4 sm:px-0 xl:-mx-6 2xl:-mx-12">
         <div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div class="flex items-start gap-4">
-                <a href="{{ route('admin.enterprise-knowledge.index') }}" class="mt-1 text-gray-400 hover:text-gray-600">
+                <a href="{{ route('admin.enterprise-knowledge.index') }}" aria-label="{{ __('admin.common.back') }}" class="mt-1 text-gray-400 hover:text-gray-600">
                     <i data-lucide="arrow-left" class="h-5 w-5"></i>
                 </a>
                 <div>
@@ -367,16 +368,16 @@
                                         {{ strtoupper((string) $revision->source) }} · {{ optional($revision->created_at)->format('Y-m-d H:i:s') }}
                                     </div>
                                 </div>
-                                <form method="POST" action="{{ route('admin.enterprise-knowledge.revisions.restore', ['projectId' => (int) $project->id, 'revisionId' => (int) $revision->id]) }}">
+                                <form method="POST" action="{{ route('admin.enterprise-knowledge.revisions.restore', ['projectId' => (int) $project->id, 'revisionId' => (int) $revision->id]) }}" data-admin-confirm-form data-admin-confirm-tone="warning" data-admin-confirm-title="{{ __('admin.enterprise_knowledge.revision_restore_action') }} · {{ $revision->summary }}" data-admin-confirm-message="{{ __('admin.action_dialog.generic_impact') }}" data-admin-confirm-guidance="{{ optional($revision->created_at)->format('Y-m-d H:i:s') }}" data-admin-confirm-label="{{ __('admin.enterprise_knowledge.revision_restore_action') }}">
                                     @csrf
-                                    <button type="submit" class="text-xs font-semibold text-blue-600 hover:text-blue-700">
+                                    <button type="submit" class="text-xs font-semibold text-blue-600 hover:text-blue-700" data-admin-confirm-submit disabled aria-disabled="true">
                                         {{ __('admin.enterprise_knowledge.revision_restore_action') }}
                                     </button>
                                 </form>
                             </div>
                         </div>
                     @empty
-                        <div class="px-6 py-8 text-center text-sm text-gray-500">{{ __('admin.no_data') }}</div>
+                        <div class="px-6 py-8 text-center text-sm text-gray-500">{{ __('admin.common.none') }}</div>
                     @endforelse
                 </div>
             </section>
@@ -701,9 +702,7 @@
                     },
                     after() {
                         textarea.value = getEditorContent();
-                        if (window.lucide) {
-                            window.lucide.createIcons();
-                        }
+                        window.GeoFlowAdminUi?.refreshIcons?.(editorNode);
                     },
                 });
             };
@@ -766,6 +765,15 @@
             saveButton?.addEventListener('click', saveContent);
             validateButton?.addEventListener('click', validateContent);
             publishButton?.addEventListener('click', async () => {
+                const confirmed = await window.AdminActionDialog?.confirm?.({
+                    title: @json(__('admin.enterprise_knowledge.publish')).concat(' “', @json((string) $project->name), '”'),
+                    message: @json(__('admin.action_dialog.generic_impact')),
+                    guidance: @json(__('admin.enterprise_knowledge.published_link')),
+                    tone: 'success',
+                    confirmLabel: @json(__('admin.enterprise_knowledge.publish')),
+                    opener: publishButton,
+                });
+                if (confirmed !== true) return;
                 publishButton.disabled = true;
                 publishButton.classList.add('opacity-70');
                 const saved = await saveContent();

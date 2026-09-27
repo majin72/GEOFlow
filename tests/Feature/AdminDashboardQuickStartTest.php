@@ -80,6 +80,13 @@ class AdminDashboardQuickStartTest extends TestCase
             ->assertSee(__('admin.dashboard.quick_start.api_title'))
             ->assertSee(__('admin.dashboard.quick_start.material_title'))
             ->assertSee(__('admin.dashboard.quick_start.task_title'))
+            ->assertSee(__('admin.analytics.navigation.overview'))
+            ->assertSee(__('admin.analytics.navigation.operations'))
+            ->assertSee(__('admin.analytics.navigation.content'))
+            ->assertSee(__('admin.analytics.navigation.traffic'))
+            ->assertSee(__('admin.analytics.navigation.ai_visibility'))
+            ->assertSee(__('admin.analytics.navigation.leads'))
+            ->assertSee(__('admin.analytics.navigation.distribution'))
             ->assertDontSee(__('admin.dashboard.analytics_card_title'))
             ->assertDontSee(__('admin.dashboard.analytics_card_button'))
             ->assertDontSee(__('admin.dashboard.category_distribution'))
@@ -102,6 +109,11 @@ class AdminDashboardQuickStartTest extends TestCase
             ->assertSee(route('admin.site-settings.index'), false)
             ->assertSee(route('admin.dashboard'), false)
             ->assertSee(route('admin.analytics'), false)
+            ->assertSee(route('admin.analytics.content'), false)
+            ->assertSee(route('admin.analytics.traffic'), false)
+            ->assertSee(route('admin.analytics.ai-visibility'), false)
+            ->assertSee(route('admin.analytics.leads'), false)
+            ->assertSee(route('admin.analytics.distribution'), false)
             ->assertSee(route('admin.ai-prompts'), false)
             ->assertSee(route('admin.ai-special-prompts'), false)
             ->assertSee(route('admin.admin-users.index'), false)
@@ -140,6 +152,63 @@ class AdminDashboardQuickStartTest extends TestCase
                 'admin.dashboard'
             );
         }
+    }
+
+    public function test_dashboard_omits_duplicate_header_actions_and_analytics_refresh_aligns_with_navigation(): void
+    {
+        $admin = Admin::query()->create([
+            'username' => 'dashboard_header_alignment_admin',
+            'password' => 'secret-123',
+            'email' => 'dashboard-header-alignment@example.com',
+            'display_name' => 'Dashboard Header Alignment Admin',
+            'role' => 'super_admin',
+            'status' => 'active',
+        ]);
+
+        $dashboard = $this->actingAs($admin, 'admin')->get(route('admin.dashboard'))->assertOk();
+        $dashboardDocument = new \DOMDocument;
+        $dashboardDocument->loadHTML($dashboard->getContent(), LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+        $dashboardXPath = new \DOMXPath($dashboardDocument);
+        $dashboardHeadings = $dashboardXPath->query('//h1');
+
+        $this->assertNotFalse($dashboardHeadings);
+        $this->assertSame(1, $dashboardHeadings->length);
+
+        $dashboardToolbars = $dashboardXPath->query('//*[@data-analytics-page-toolbar]');
+
+        $this->assertNotFalse($dashboardToolbars);
+        $this->assertSame(1, $dashboardToolbars->length);
+
+        $dashboardToolbar = $dashboardToolbars->item(0);
+
+        $this->assertInstanceOf(\DOMElement::class, $dashboardToolbar);
+        $this->assertSame(1, $dashboardXPath->query('.//*[@data-analytics-navigation]', $dashboardToolbar)?->length);
+        $this->assertSame(0, $dashboardXPath->query('.//button[@onclick="location.reload()"]', $dashboardToolbar)?->length);
+        $this->assertSame(0, $dashboardXPath->query('.//a[@href="'.route('admin.tasks.create').'"]', $dashboardToolbar)?->length);
+
+        $analytics = $this->get(route('admin.analytics'))->assertOk();
+        $analyticsDocument = new \DOMDocument;
+        $analyticsDocument->loadHTML($analytics->getContent(), LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+        $analyticsXPath = new \DOMXPath($analyticsDocument);
+        $toolbars = $analyticsXPath->query('//*[@data-analytics-page-toolbar]');
+
+        $this->assertNotFalse($toolbars);
+        $this->assertSame(1, $toolbars->length);
+
+        $toolbar = $toolbars->item(0);
+
+        $this->assertInstanceOf(\DOMElement::class, $toolbar);
+        $this->assertContains('items-end', preg_split('/\s+/', trim($toolbar->getAttribute('class'))));
+        $navigation = $analyticsXPath->query('.//*[@data-analytics-navigation]', $toolbar)?->item(0);
+
+        $this->assertInstanceOf(\DOMElement::class, $navigation);
+        $this->assertNotContains('border-b', preg_split('/\s+/', trim($navigation->getAttribute('class'))));
+        $this->assertSame(1, $analyticsXPath->query('.//button[@onclick="location.reload()"]', $toolbar)?->length);
+
+        $header = $toolbar->parentNode;
+
+        $this->assertInstanceOf(\DOMElement::class, $header);
+        $this->assertContains('mb-8', preg_split('/\s+/', trim($header->getAttribute('class'))));
     }
 
     /**
@@ -280,6 +349,10 @@ class AdminDashboardQuickStartTest extends TestCase
         $this->assertStringContainsString(__('admin.footer.help_docs_link'), $zhHtml);
         $this->assertStringContainsString('https://github.com/yaojingang/GEOFlow/wiki', $zhHtml);
         $this->assertStringNotContainsString('https://github.com/yaojingang/GEOFlow/wiki/Home-English', $zhHtml);
+        $this->assertStringContainsString(
+            'https://github.com/yaojingang/GEOFlow/blob/main/docs/CHANGELOG.md',
+            $zhHtml,
+        );
 
         session(['locale' => 'en']);
 
@@ -290,5 +363,9 @@ class AdminDashboardQuickStartTest extends TestCase
 
         $this->assertStringContainsString('Help docs', $enHtml);
         $this->assertStringContainsString('https://github.com/yaojingang/GEOFlow/wiki/Home-English', $enHtml);
+        $this->assertStringContainsString(
+            'https://github.com/yaojingang/GEOFlow/blob/main/docs/CHANGELOG_en.md',
+            $enHtml,
+        );
     }
 }

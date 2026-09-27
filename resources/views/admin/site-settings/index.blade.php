@@ -6,7 +6,7 @@
             [
                 'title' => __('admin.site_settings.group_basic'),
                 'desc' => __('admin.site_settings.group_basic_desc'),
-                'columns' => 'md:grid-cols-2',
+                'columns' => 'lg:grid-cols-3',
                 'items' => [
                     [
                         'title' => __('admin.site_settings.section_basic'),
@@ -26,6 +26,24 @@
                         'iconClass' => 'bg-indigo-50 text-indigo-600 ring-indigo-100',
                         'action' => __('admin.site_settings.open_section'),
                     ],
+                    [
+                        'title' => __('admin.site_settings.homepage.section_title'),
+                        'desc' => __('admin.site_settings.homepage.configured_count', ['count' => $homepageModuleCount ?? 0]),
+                        'href' => route('admin.site-settings.homepage-modules.edit'),
+                        'target' => null,
+                        'icon' => 'panels-top-left',
+                        'iconClass' => 'bg-cyan-50 text-cyan-700 ring-cyan-100',
+                        'action' => __('admin.site_settings.homepage.open_editor'),
+                    ],
+                    [
+                        'title' => __('article_permalink.title'),
+                        'desc' => __('article_permalink.description'),
+                        'href' => '#site-settings-permalink',
+                        'target' => 'site-settings-permalink',
+                        'icon' => 'link-2',
+                        'iconClass' => 'bg-violet-50 text-violet-700 ring-violet-100',
+                        'action' => __('admin.site_settings.open_section'),
+                    ],
                 ],
             ],
         ],
@@ -35,6 +53,18 @@
                 'desc' => __('admin.site_settings.group_operations_desc'),
                 'columns' => '',
                 'items' => [
+                    [
+                        'title' => __('friend_links.title'),
+                        'desc' => __('friend_links.count', [
+                            'total' => count($friendLinkSnapshot['config']['links'] ?? []),
+                            'enabled' => collect($friendLinkSnapshot['config']['links'] ?? [])->where('enabled', true)->count(),
+                        ]),
+                        'href' => route('admin.site-settings.friend-links.edit'),
+                        'target' => null,
+                        'icon' => 'link-2',
+                        'iconClass' => 'bg-blue-50 text-blue-600 ring-blue-100',
+                        'action' => __('admin.site_settings.manage_module'),
+                    ],
                     [
                         'title' => __('admin.site_settings.ads.section_title'),
                         'desc' => __('admin.site_settings.module_ads_desc'),
@@ -64,52 +94,196 @@
             ],
         ],
     ];
+
+    if (auth('admin')->user()?->canManageProtectedWorkflows()) {
+        $siteSettingsGroupRows[] = [
+            [
+                'title' => __('admin.ui_v3.system_management'),
+                'desc' => __('admin.ui_v3.system_management_hint'),
+                'columns' => 'md:grid-cols-2 xl:grid-cols-4',
+                'items' => [
+                    [
+                        'title' => __('admin.site_settings.ai_workspace_runtime.title'),
+                        'desc' => __('admin.site_settings.ai_workspace_runtime.module_desc'),
+                        'href' => '#site-settings-ai-workspace',
+                        'target' => 'site-settings-ai-workspace',
+                        'icon' => 'sparkles',
+                        'iconClass' => 'bg-indigo-50 text-indigo-600 ring-indigo-100',
+                        'action' => __('admin.site_settings.open_section'),
+                    ],
+                    [
+                        'title' => __('admin.ui_v3.users_permissions'),
+                        'desc' => __('admin.ui_v3.user_settings_hint'),
+                        'href' => route('admin.admin-users.index'),
+                        'target' => null,
+                        'icon' => 'users-round',
+                        'iconClass' => 'bg-blue-50 text-blue-600 ring-blue-100',
+                        'action' => __('admin.site_settings.manage_module'),
+                    ],
+                    [
+                        'title' => __('admin.ui_v3.security_audit'),
+                        'desc' => __('admin.ui_v3.audit_settings_hint'),
+                        'href' => route('admin.admin-activity-logs'),
+                        'target' => null,
+                        'icon' => 'shield-check',
+                        'iconClass' => 'bg-emerald-50 text-emerald-600 ring-emerald-100',
+                        'action' => __('admin.site_settings.manage_module'),
+                    ],
+                    [
+                        'title' => __('admin.ui_v3.system_updates'),
+                        'desc' => __('admin.ui_v3.system_updates_hint'),
+                        'href' => route('admin.system-updates.index'),
+                        'target' => null,
+                        'icon' => 'refresh-cw',
+                        'iconClass' => 'bg-violet-50 text-violet-600 ring-violet-100',
+                        'action' => __('admin.site_settings.manage_module'),
+                    ],
+                ],
+            ],
+        ];
+    }
 @endphp
 
 @section('content')
-    <div class="px-4 sm:px-0">
-        <div class="mb-8">
-            <h1 class="text-2xl font-bold text-gray-900">{{ __('admin.site_settings.page_title') }}</h1>
-            <p class="mt-1 text-sm text-gray-600">{{ __('admin.site_settings.page_subtitle') }}</p>
-        </div>
+    @php
+        $showHomepageEditor = $homepageEditorPage ?? false;
+        $siteSettingsOpenTarget = session('site_settings_open_target');
+    @endphp
 
-        <div class="mb-8 space-y-6">
-            @foreach ($siteSettingsGroupRows as $settingsGroupRow)
-                <div class="{{ count($settingsGroupRow) > 1 ? 'grid grid-cols-1 gap-6 lg:grid-cols-2' : 'space-y-6' }}">
-                    @foreach ($settingsGroupRow as $settingsGroup)
-                        <section>
-                            <div class="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-                                <div>
-                                    <h2 class="text-sm font-semibold text-gray-900">{{ $settingsGroup['title'] }}</h2>
-                                    <p class="mt-1 text-sm leading-6 text-gray-500">{{ $settingsGroup['desc'] }}</p>
-                                </div>
-                            </div>
-                            <div class="grid grid-cols-1 gap-4 {{ $settingsGroup['columns'] }}">
-                                @foreach ($settingsGroup['items'] as $settingsItem)
-                                    <a href="{{ $settingsItem['href'] }}"
-                                       @if ($settingsItem['target'] !== null) data-site-settings-target="{{ $settingsItem['target'] }}" @endif
-                                       class="group flex min-h-36 flex-col justify-between rounded-lg border border-gray-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
-                                        <span class="flex items-start gap-4">
-                                            <span class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md ring-1 {{ $settingsItem['iconClass'] }}">
-                                                <i data-lucide="{{ $settingsItem['icon'] }}" class="h-5 w-5"></i>
-                                            </span>
-                                            <span class="min-w-0">
-                                                <span class="block text-base font-semibold text-gray-900">{{ $settingsItem['title'] }}</span>
-                                                <span class="mt-1 block text-sm leading-6 text-gray-600">{{ $settingsItem['desc'] }}</span>
-                                            </span>
-                                        </span>
-                                        <span class="mt-4 inline-flex items-center text-sm font-semibold text-blue-700">
-                                            {{ $settingsItem['action'] }}
-                                            <i data-lucide="arrow-right" class="ml-1.5 h-4 w-4 transition-transform group-hover:translate-x-0.5"></i>
-                                        </span>
-                                    </a>
-                                @endforeach
-                            </div>
-                        </section>
-                    @endforeach
+    <div class="px-4 sm:px-0"
+         data-url-separate-editor
+         data-has-unsaved-input="{{ session()->hasOldInput('site_name') ? '1' : '0' }}"
+         @if (is_string($siteSettingsOpenTarget) && $siteSettingsOpenTarget !== '') data-site-settings-open-target="{{ $siteSettingsOpenTarget }}" @endif>
+        @if ($showHomepageEditor)
+            <div class="mb-8">
+                <a href="{{ route('admin.site-settings.index') }}" class="inline-flex min-h-10 items-center text-sm font-semibold text-gray-600 transition-colors hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                    <i data-lucide="arrow-left" class="mr-2 h-4 w-4" aria-hidden="true"></i>
+                    {{ __('admin.site_settings.homepage.back_to_settings') }}
+                </a>
+                <div class="mt-4">
+                    <div class="inline-flex items-center rounded-full bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-800 ring-1 ring-cyan-100">
+                        <i data-lucide="panels-top-left" class="mr-1.5 h-3.5 w-3.5" aria-hidden="true"></i>
+                        {{ __('admin.site_settings.homepage.badge') }}
+                    </div>
+                    <h1 id="homepage-editor-title" class="mt-3 text-2xl font-bold text-gray-900">{{ __('admin.site_settings.homepage.page_title') }}</h1>
+                    <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-600">{{ __('admin.site_settings.homepage.page_subtitle') }}</p>
                 </div>
-            @endforeach
-        </div>
+            </div>
+        @else
+            <div class="mb-8">
+                <h1 class="text-2xl font-bold text-gray-900">{{ __('admin.site_settings.page_title') }}</h1>
+                <p class="mt-1 text-sm text-gray-600">{{ __('admin.site_settings.page_subtitle') }}</p>
+            </div>
+
+            <div class="mb-8 space-y-6">
+                @foreach ($siteSettingsGroupRows as $settingsGroupRow)
+                    <div class="{{ count($settingsGroupRow) > 1 ? 'grid grid-cols-1 gap-6 lg:grid-cols-2' : 'space-y-6' }}">
+                        @foreach ($settingsGroupRow as $settingsGroup)
+                            <section>
+                                <div class="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                                    <div>
+                                        <h2 class="text-sm font-semibold text-gray-900">{{ $settingsGroup['title'] }}</h2>
+                                        <p class="mt-1 text-sm leading-6 text-gray-500">{{ $settingsGroup['desc'] }}</p>
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-1 gap-4 {{ $settingsGroup['columns'] }}">
+                                    @foreach ($settingsGroup['items'] as $settingsItem)
+                                        <a href="{{ $settingsItem['href'] }}"
+                                           @if ($settingsItem['target'] !== null) data-site-settings-target="{{ $settingsItem['target'] }}" @endif
+                                           class="group flex min-h-36 flex-col justify-between rounded-lg border border-gray-200 bg-white p-5 shadow-sm transition-[transform,border-color,box-shadow] hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                                            <span class="flex items-start gap-4">
+                                                <span class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md ring-1 {{ $settingsItem['iconClass'] }}">
+                                                    <i data-lucide="{{ $settingsItem['icon'] }}" class="h-5 w-5"></i>
+                                                </span>
+                                                <span class="min-w-0">
+                                                    <span class="block text-base font-semibold text-gray-900">{{ $settingsItem['title'] }}</span>
+                                                    <span class="mt-1 block text-sm leading-6 text-gray-600">{{ $settingsItem['desc'] }}</span>
+                                                </span>
+                                            </span>
+                                            <span class="mt-4 inline-flex items-center text-sm font-semibold text-blue-700">
+                                                {{ $settingsItem['action'] }}
+                                                <i data-lucide="arrow-right" class="ml-1.5 h-4 w-4 transition-transform group-hover:translate-x-0.5"></i>
+                                            </span>
+                                        </a>
+                                    @endforeach
+                                </div>
+                            </section>
+                        @endforeach
+                    </div>
+                @endforeach
+            </div>
+
+        @if ($canManageProtectedWorkflows ?? false)
+        <details id="site-settings-ai-workspace" class="mb-6 overflow-hidden rounded-lg bg-white shadow group" @if ($errors->has('enabled') || $siteSettingsOpenTarget === 'site-settings-ai-workspace') open @endif>
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-4 border-b border-gray-200 px-6 py-5 [&::-webkit-details-marker]:hidden">
+                <div class="flex min-w-0 items-start gap-4">
+                    <span class="hidden h-10 w-10 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100 sm:inline-flex">
+                        <i data-lucide="sparkles" class="h-5 w-5" aria-hidden="true"></i>
+                    </span>
+                    <div class="min-w-0 max-w-3xl">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <h3 class="text-lg font-medium text-gray-900">{{ __('admin.site_settings.ai_workspace_runtime.title') }}</h3>
+                            <span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold {{ ($aiWorkspaceRuntime['effective_enabled'] ?? false) ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100' : 'bg-gray-100 text-gray-700 ring-1 ring-gray-200' }}">
+                                {{ ($aiWorkspaceRuntime['effective_enabled'] ?? false) ? __('admin.site_settings.ai_workspace_runtime.status_enabled') : __('admin.site_settings.ai_workspace_runtime.status_disabled') }}
+                            </span>
+                        </div>
+                        <p class="mt-1 text-sm leading-6 text-gray-600">{{ __('admin.site_settings.ai_workspace_runtime.description') }}</p>
+                    </div>
+                </div>
+                <i data-lucide="chevron-down" class="h-5 w-5 shrink-0 text-gray-400 transition-transform duration-200 group-open:rotate-180" aria-hidden="true"></i>
+            </summary>
+            <div class="px-6 py-6">
+                <form method="POST" action="{{ route('admin.site-settings.ai-workspace.update') }}" class="space-y-5">
+                    @csrf
+                <input type="hidden" name="appearance_revision" value="{{ $appearanceRevision }}">
+                    <input type="hidden" name="enabled" value="0">
+
+                    <div class="rounded-lg border border-gray-200 bg-gray-50/70 p-4 sm:p-5">
+                        <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div class="max-w-2xl">
+                                <p class="text-sm font-semibold text-gray-900">{{ __('admin.site_settings.ai_workspace_runtime.switch_label') }}</p>
+                                <p id="ai-workspace-runtime-help" class="mt-1 text-sm leading-6 text-gray-600">{{ __('admin.site_settings.ai_workspace_runtime.switch_help') }}</p>
+                            </div>
+                            <label class="inline-flex min-h-11 cursor-pointer items-center gap-3 self-start rounded-md px-1 focus-within:ring-2 focus-within:ring-blue-500 focus-within:ring-offset-2 sm:self-auto">
+                                <input
+                                    id="ai-workspace-runtime-enabled"
+                                    type="checkbox"
+                                    name="enabled"
+                                    value="1"
+                                    class="peer sr-only"
+                                    aria-label="{{ __('admin.site_settings.ai_workspace_runtime.switch_label') }}"
+                                    aria-describedby="ai-workspace-runtime-help"
+                                    data-ai-workspace-runtime-toggle
+                                    @checked(old('enabled', $aiWorkspaceRuntime['preferred_enabled'] ?? false))
+                                >
+                                <span class="relative h-7 w-12 rounded-full bg-gray-300 transition-colors after:absolute after:left-1 after:top-1 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-blue-600 peer-checked:after:translate-x-5" aria-hidden="true"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    @if ($aiWorkspaceRuntime['forced_disabled'] ?? false)
+                        <div class="flex gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900" role="status">
+                            <i data-lucide="shield-alert" class="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true"></i>
+                            <p>{{ __('admin.site_settings.ai_workspace_runtime.forced_disabled') }}</p>
+                        </div>
+                    @endif
+
+                    <div class="flex flex-col gap-3 border-t border-gray-200 pt-5 sm:flex-row sm:items-center sm:justify-between">
+                        <div class="text-sm leading-6 text-gray-500">
+                            <p>{{ __('admin.site_settings.ai_workspace_runtime.impact') }}</p>
+                            <p class="mt-1 text-xs">
+                                {{ ($aiWorkspaceRuntime['source'] ?? 'environment_default') === 'site_setting' ? __('admin.site_settings.ai_workspace_runtime.source_site_setting') : __('admin.site_settings.ai_workspace_runtime.source_environment') }}
+                            </p>
+                        </div>
+                        <button type="submit" class="inline-flex min-h-11 shrink-0 items-center justify-center rounded-md bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 active:scale-[.98]">
+                            <i data-lucide="save" class="mr-2 h-4 w-4" aria-hidden="true"></i>
+                            {{ __('admin.site_settings.ai_workspace_runtime.save') }}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </details>
+        @endif
 
         <details id="site-settings-basic" class="mb-6 bg-white shadow rounded-lg overflow-hidden group">
             <summary class="px-6 py-5 border-b border-gray-200 flex items-center justify-between gap-4 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
@@ -125,8 +299,9 @@
                 <i data-lucide="chevron-down" class="w-5 h-5 shrink-0 text-gray-400 transition-transform duration-200 group-open:rotate-180" aria-hidden="true"></i>
             </summary>
             <div class="px-6 py-6">
-                <form method="POST" action="{{ route('admin.site-settings.update') }}" class="space-y-6">
+                <form method="POST" action="{{ route('admin.site-settings.update') }}" class="space-y-6" data-url-source-form>
                     @csrf
+                <input type="hidden" name="appearance_revision" value="{{ $appearanceRevision }}">
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
@@ -188,6 +363,26 @@
                                value="{{ $settings['copyright_info'] }}"
                                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
                                placeholder="© 2024 Site Name. All rights reserved.">
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
+                        <div>
+                            <label for="filing_info" class="block text-sm font-medium text-gray-700 mb-2">{{ __('admin.site_settings.field_filing_info') }}</label>
+                            <input id="filing_info" type="text" name="filing_info"
+                                   value="{{ old('filing_info', $settings['filing_info']) }}"
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
+                                   placeholder="{{ __('admin.site_settings.placeholder_filing_info') }}">
+                        </div>
+
+                        <div>
+                            <label for="filing_url" class="block text-sm font-medium text-gray-700 mb-2">{{ __('admin.site_settings.field_filing_url') }}</label>
+                            <input id="filing_url" type="url" name="filing_url"
+                                   value="{{ old('filing_url', $settings['filing_url']) }}"
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
+                                   placeholder="https://beian.miit.gov.cn/">
+                        </div>
+
+                        <p class="-mt-3 text-xs leading-5 text-gray-500 md:col-span-2">{{ __('admin.site_settings.filing_help') }}</p>
                     </div>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -317,20 +512,121 @@
             </div>
         </details>
 
-        <details id="site-settings-theme" class="mb-6 bg-white shadow rounded-lg overflow-hidden group">
-            <summary class="px-6 py-5 border-b border-gray-200 flex items-center justify-between gap-4 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+        <details id="site-settings-permalink" class="mb-6 overflow-hidden rounded-lg bg-white shadow group" aria-labelledby="article-permalink-title" @if($errors->has('pattern') || is_array($articlePermalinkPreview ?? null) || session('url_change_draft_restored')) open @endif>
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-4 border-b border-gray-200 px-6 py-5 [&::-webkit-details-marker]:hidden">
                 <div class="flex min-w-0 items-start gap-4">
-                    <span class="hidden h-10 w-10 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100 sm:inline-flex">
-                        <i data-lucide="layout-template" class="h-5 w-5"></i>
+                    <span class="hidden h-10 w-10 shrink-0 items-center justify-center rounded-md bg-violet-50 text-violet-700 ring-1 ring-violet-100 sm:inline-flex">
+                        <i data-lucide="link-2" class="h-5 w-5"></i>
                     </span>
                     <div class="min-w-0 max-w-3xl">
-                        <h3 class="text-lg font-medium text-gray-900">{{ __('admin.site_settings.theme.section_title') }}</h3>
-                        <p class="mt-1 text-sm leading-6 text-gray-600">{{ __('admin.site_settings.module_theme_desc') }}</p>
+                        <h3 id="article-permalink-title" class="text-lg font-medium text-gray-900">{{ __('article_permalink.title') }}</h3>
+                        <p class="mt-1 text-sm leading-6 text-gray-600">{{ __('article_permalink.description') }}</p>
                     </div>
                 </div>
-                <i data-lucide="chevron-down" class="w-5 h-5 shrink-0 text-gray-400 transition-transform duration-200 group-open:rotate-180" aria-hidden="true"></i>
+                <i data-lucide="chevron-down" class="h-5 w-5 shrink-0 text-gray-400 transition-transform duration-200 group-open:rotate-180" aria-hidden="true"></i>
             </summary>
             <div class="px-6 py-6">
+                    <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div class="max-w-3xl">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <span class="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 ring-1 ring-violet-100">
+                                    revision {{ $articlePermalinkPolicy->revision }}
+                                </span>
+                            </div>
+                            <p class="mt-2 text-sm leading-6 text-gray-600">{{ __('article_permalink.current_rule', ['pattern' => $articlePermalinkPolicy->currentPattern]) }}</p>
+                            @if ($articlePermalinkPolicy->activatedAt)
+                                <p class="mt-1 text-xs text-gray-500">{{ __('article_permalink.last_activated', ['time' => $articlePermalinkPolicy->activatedAt]) }}</p>
+                            @endif
+                        </div>
+
+                    </div>
+
+                    @if ($articlePermalinkInstalledThemeWarning ?? false)
+                        <div class="mt-5 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900" role="note">
+                            {{ __('article_permalink.installed_theme_warning') }}
+                        </div>
+                    @endif
+
+                    <p class="mt-4 text-sm leading-6 text-gray-600">{{ __('url_change.ui.stable') }}</p>
+                    <details class="mt-5" @if($errors->has('pattern') || session('url_change_draft_restored')) open @endif>
+                        <summary class="min-h-10 cursor-pointer text-sm font-semibold text-blue-700 focus-visible:outline-2 focus-visible:outline-blue-600">{{ __('url_change.ui.edit_rule') }}</summary>
+                    <form method="POST" action="{{ route('admin.site-settings.article-permalink.preview') }}" class="mt-5 rounded-lg border border-gray-200 bg-gray-50/70 p-5" data-url-separate-check>
+                        @csrf
+                <input type="hidden" name="appearance_revision" value="{{ $appearanceRevision }}">
+                        <fieldset @disabled(!($canManageProtectedWorkflows ?? false))>
+                            <legend class="text-sm font-semibold text-gray-900">{{ __('article_permalink.choose_preset') }}</legend>
+                            <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                                @foreach ($articlePermalinkPresets as $presetKey => $preset)
+                                    <label class="flex cursor-pointer items-start gap-3 rounded-md border border-gray-200 bg-white p-3 hover:border-violet-300">
+                                        <input type="radio" name="permalink_preset" value="{{ $preset['pattern'] }}" class="mt-1 border-gray-300 text-violet-600 focus:ring-violet-500" data-permalink-preset @checked(old('pattern', $articlePermalinkPolicy->currentPattern) === $preset['pattern'])>
+                                        <span class="min-w-0">
+                                            <span class="block text-sm font-medium text-gray-900">{{ __($preset['name']) }}</span>
+                                            <code class="mt-1 block break-all font-mono text-xs text-gray-600">{{ $preset['pattern'] }}</code>
+                                        </span>
+                                    </label>
+                                @endforeach
+                            </div>
+
+                            <label for="article-permalink-pattern" class="mt-5 block text-sm font-semibold text-gray-900">{{ __('article_permalink.custom_template') }}</label>
+                            <input id="article-permalink-pattern" type="text" name="pattern" required maxlength="160" value="{{ old('pattern', $articlePermalinkPolicy->currentPattern) }}" class="mt-2 w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500" aria-describedby="article-permalink-help article-permalink-format-help @error('pattern') article-permalink-error @enderror" @error('pattern') aria-invalid="true" @enderror>
+                            <p id="article-permalink-help" class="mt-2 text-xs leading-5 text-gray-600">{{ __('article_permalink.token_help') }}</p>
+                            <p id="article-permalink-format-help" class="mt-1 text-xs leading-5 text-gray-600">
+                                {{ __('article_permalink.format_help') }}
+                                <span class="font-medium text-violet-700">{{ __('article_permalink.format_example') }}</span>
+                            </p>
+                            @error('pattern')
+                                <p id="article-permalink-error" class="mt-3 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm leading-6 text-red-700" role="alert">
+                                    <i data-lucide="circle-alert" class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true"></i>
+                                    <span>{{ $message }}</span>
+                                </p>
+                            @enderror
+
+                            <div class="mt-4 flex justify-end">
+                                <button type="submit" class="inline-flex min-h-10 items-center justify-center rounded-md border border-transparent bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 active:scale-[.98] disabled:cursor-not-allowed disabled:bg-gray-400" data-url-separate-submit disabled>
+                                    <i data-lucide="scan-search" class="mr-2 h-4 w-4"></i>
+                                    {{ __('url_change.ui.check') }}
+                                </button>
+                            </div>
+                        </fieldset>
+                        <p class="mt-3 text-xs leading-5 text-gray-600">{{ __('url_change.ui.check_hint') }}</p>
+                        <p class="mt-2 text-sm leading-6 text-amber-900" data-url-unsaved-hint hidden>{{ __('url_change.ui.save_first') }}</p>
+                        <p class="mt-2 text-xs leading-5 text-amber-900" data-url-separate-nojs>{{ __('url_change.ui.no_js') }}</p>
+                    </form>
+                    </details>
+
+                    @if ($articlePermalinkPolicy->history !== [])
+                        <div class="mt-5">
+                            <h5 class="text-sm font-semibold text-gray-900">{{ __('article_permalink.history') }}</h5>
+                            <div class="mt-2 flex flex-wrap gap-2">
+                                @foreach ($articlePermalinkPolicy->history as $historicalPolicy)
+                                    <code class="rounded-md bg-gray-100 px-2.5 py-1.5 text-xs text-gray-700">{{ $historicalPolicy['pattern'] }}</code>
+                                @endforeach
+                            </div>
+                        </div>
+                    @endif
+            </div>
+        </details>
+        @endif
+
+        @if ($showHomepageEditor)
+            <section class="mb-6 overflow-hidden rounded-lg bg-white shadow" aria-labelledby="homepage-editor-title">
+        @else
+            <details id="site-settings-theme" class="mb-6 overflow-hidden rounded-lg bg-white shadow group">
+                <summary class="flex cursor-pointer list-none items-center justify-between gap-4 border-b border-gray-200 px-6 py-5 [&::-webkit-details-marker]:hidden">
+                    <div class="flex min-w-0 items-start gap-4">
+                        <span class="hidden h-10 w-10 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100 sm:inline-flex">
+                            <i data-lucide="layout-template" class="h-5 w-5"></i>
+                        </span>
+                        <div class="min-w-0 max-w-3xl">
+                            <h3 class="text-lg font-medium text-gray-900">{{ __('admin.site_settings.theme.section_title') }}</h3>
+                            <p class="mt-1 text-sm leading-6 text-gray-600">{{ __('admin.site_settings.module_theme_desc') }}</p>
+                        </div>
+                    </div>
+                    <i data-lucide="chevron-down" class="h-5 w-5 shrink-0 text-gray-400 transition-transform duration-200 group-open:rotate-180" aria-hidden="true"></i>
+                </summary>
+        @endif
+            <div class="px-6 py-6">
+                @if ($showHomepageEditor)
                 @php
                     $homepageFormModules = old('homepage_modules', $homepageModules ?? []);
                     $homepageFormStyle = old('homepage_style', $homepageStyle ?? []);
@@ -338,6 +634,7 @@
 
                 <form method="POST" action="{{ route('admin.site-settings.homepage-modules.preset') }}" class="mb-5 rounded-2xl border border-indigo-100 bg-white p-5">
                     @csrf
+                <input type="hidden" name="appearance_revision" value="{{ $appearanceRevision }}">
                     <div class="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
                         <div class="min-w-0 flex-1">
                             <div class="inline-flex items-center rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-indigo-100">
@@ -364,7 +661,7 @@
                                 </select>
                             </div>
                             <div class="flex items-end">
-                                <button type="submit" class="inline-flex w-full items-center justify-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
+                                <button type="submit" class="inline-flex min-h-10 w-full items-center justify-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
                                     <i data-lucide="wand-sparkles" class="mr-2 h-4 w-4"></i>
                                     {{ __('admin.site_settings.homepage.preset_apply') }}
                                 </button>
@@ -375,6 +672,7 @@
 
                 <form method="POST" action="{{ route('admin.site-settings.homepage-modules.import') }}" class="mb-5 rounded-2xl border border-blue-100 bg-white p-5">
                     @csrf
+                <input type="hidden" name="appearance_revision" value="{{ $appearanceRevision }}">
                     <div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_240px]">
                         <div class="min-w-0">
                             <div class="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-100">
@@ -397,7 +695,7 @@
                                     @endforeach
                                 </select>
                             </div>
-                            <button type="submit" class="inline-flex w-full items-center justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+                            <button type="submit" class="inline-flex min-h-10 w-full items-center justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
                                 <i data-lucide="upload" class="mr-2 h-4 w-4"></i>
                                 {{ __('admin.site_settings.homepage.import_apply') }}
                             </button>
@@ -407,21 +705,21 @@
 
                 <form method="POST" action="{{ route('admin.site-settings.homepage-modules') }}" id="homepage-module-form" class="mb-8 rounded-2xl border border-gray-200 bg-gray-50/70 p-5">
                     @csrf
+                <input type="hidden" name="appearance_revision" value="{{ $appearanceRevision }}">
                     <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div>
                             <div class="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-100">
                                 <i data-lucide="layout-dashboard" class="mr-1.5 h-3.5 w-3.5"></i>
                                 {{ __('admin.site_settings.homepage.badge') }}
                             </div>
-                            <h4 class="mt-3 text-base font-semibold text-gray-900">{{ __('admin.site_settings.homepage.section_title') }}</h4>
-                            <p class="mt-1 text-sm leading-6 text-gray-600">{{ __('admin.site_settings.homepage.section_desc') }}</p>
+                            <p class="mt-3 max-w-3xl text-sm leading-6 text-gray-600">{{ __('admin.site_settings.homepage.section_desc') }}</p>
                         </div>
                         <div class="flex shrink-0 flex-wrap gap-2">
-                            <button type="button" id="add-homepage-module" class="inline-flex items-center rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50">
+                            <button type="button" id="add-homepage-module" class="inline-flex min-h-10 items-center rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50">
                                 <i data-lucide="plus" class="mr-2 h-4 w-4"></i>
                                 {{ __('admin.site_settings.homepage.add_module') }}
                             </button>
-                            <button type="submit" class="inline-flex items-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+                            <button type="submit" class="inline-flex min-h-10 items-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
                                 <i data-lucide="save" class="mr-2 h-4 w-4"></i>
                                 {{ __('admin.site_settings.homepage.save') }}
                             </button>
@@ -488,7 +786,7 @@
                                         <div class="text-sm font-semibold text-gray-900">{{ __('admin.site_settings.homepage.module_title', ['index' => $index + 1]) }}</div>
                                         <div class="mt-1 text-xs text-gray-500">{{ __('admin.site_settings.homepage.module_desc') }}</div>
                                     </div>
-                                    <button type="button" class="remove-homepage-module inline-flex items-center rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50">
+                                    <button type="button" class="remove-homepage-module inline-flex min-h-10 items-center rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50">
                                         <i data-lucide="trash-2" class="mr-2 h-4 w-4"></i>
                                         {{ __('admin.button.delete') }}
                                     </button>
@@ -616,12 +914,13 @@
                     </div>
                 </form>
 
+                @else
                 <form method="POST" action="{{ route('admin.site-settings.theme') }}" class="space-y-5">
                     @csrf
+                <input type="hidden" name="appearance_revision" value="{{ $appearanceRevision }}">
 
                     @php
                         $currentThemeLabel = __('admin.site_settings.theme.default_name');
-                        $canEditThemeFiles = auth('admin')->user()?->isSuperAdmin() === true;
                         foreach ($availableThemes as $themeOption) {
                             if ($themeOption['id'] === $settings['active_theme']) {
                                 $currentThemeLabel = $themeOption['name'];
@@ -636,6 +935,7 @@
                         <div class="text-xs text-gray-500">{{ __('admin.site_settings.theme.current_help') }}</div>
                     </div>
 
+                    @if ($canManageProtectedWorkflows)
                     <div class="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-5">
                         <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                             <div class="min-w-0">
@@ -645,9 +945,7 @@
                                 </div>
                                 <h4 class="mt-3 text-base font-semibold text-gray-900">{{ __('admin.theme_replication.entry_title') }}</h4>
                                 <p class="mt-1 text-sm text-gray-600">{{ __('admin.theme_replication.entry_desc') }}</p>
-                                @if (! ($themeReplicationDeployment['can_publish_directly'] ?? false))
-                                    <p class="mt-2 text-xs text-amber-700">{{ __('admin.theme_replication.deployment.readonly_hint') }}</p>
-                                @endif
+                                <p class="mt-2 text-xs text-amber-700">{{ __('admin.theme_replication.deployment.package_only_hint') }}</p>
                             </div>
                             <a href="{{ route('admin.site-settings.theme-replications.create') }}" class="inline-flex shrink-0 items-center justify-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700">
                                 <i data-lucide="copy-plus" class="mr-2 h-4 w-4"></i>
@@ -669,7 +967,16 @@
                             </div>
                         @endif
                     </div>
+                    @endif
 
+                    @if(auth('admin')->user()?->canManageProtectedWorkflows())
+                        <div class="flex flex-wrap items-center justify-between gap-3 border-y border-gray-200 py-4" data-theme-package-actions>
+                            <p class="text-sm text-gray-600">{{ __('admin.theme_packages.entry_hint') }}</p>
+                            <a href="{{ route('admin.site-settings.theme-packages.imports.create') }}" class="inline-flex min-h-11 items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 active:scale-[.98]">
+                                <i data-lucide="upload" class="h-4 w-4" aria-hidden="true"></i>{{ __('admin.theme_packages.import_title') }}
+                            </a>
+                        </div>
+                    @endif
                     <div class="space-y-4">
                         <label class="flex items-start gap-4 rounded-2xl border border-gray-200 bg-gray-50/70 p-4">
                             <input type="radio" name="active_theme" value="" class="mt-1 text-blue-600 focus:ring-blue-500" @checked($settings['active_theme'] === '')>
@@ -681,7 +988,7 @@
 
                         @foreach ($availableThemes as $themeOption)
                             <label class="flex items-start gap-4 rounded-2xl border border-gray-200 bg-white p-4">
-                                <input type="radio" name="active_theme" value="{{ $themeOption['id'] }}" class="mt-1 text-blue-600 focus:ring-blue-500" @checked($settings['active_theme'] === $themeOption['id'])>
+                                <input type="radio" name="active_theme" value="{{ $themeOption['id'] }}" class="mt-1 text-blue-600 focus:ring-blue-500" @checked($settings['active_theme'] === $themeOption['id']) @disabled(($themeOption['source'] ?? '') === 'installed' && !auth('admin')->user()?->canManageProtectedWorkflows())>
                                 <div class="min-w-0 flex-1">
                                     <div class="flex flex-wrap items-center gap-2">
                                         <div class="text-sm font-semibold text-gray-900">{{ $themeOption['name'] }}</div>
@@ -691,40 +998,45 @@
                                         @if ($settings['active_theme'] === $themeOption['id'])
                                             <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">{{ __('admin.site_settings.theme.active_badge') }}</span>
                                         @endif
+                                        @if(($themeOption['source'] ?? '') === 'installed')
+                                            <span class="text-xs text-gray-500">{{ __('admin.theme_packages.source_installed') }}</span>
+                                        @endif
+                                        @if(($themeOption['distribution']['visibility'] ?? '') === 'customer_private')
+                                            <span class="text-xs font-medium text-amber-800">{{ __('admin.theme_packages.private') }}</span>
+                                        @endif
                                     </div>
                                     <div class="mt-1 text-sm text-gray-600">
                                         {{ $themeOption['description'] !== '' ? $themeOption['description'] : __('admin.site_settings.theme.no_description') }}
                                     </div>
-                                    <div class="mt-3 flex flex-wrap gap-2">
-                                        @if ($canEditThemeFiles)
-                                            <a href="{{ route('admin.site-settings.theme-editor.preview', ['themeId' => $themeOption['id'], 'page' => 'home'], false) }}" target="_blank" rel="noopener" onclick="event.stopPropagation();" class="inline-flex items-center rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700">{{ __('admin.site_settings.theme.preview_home') }}</a>
-                                            <a href="{{ route('admin.site-settings.theme-editor.preview', ['themeId' => $themeOption['id'], 'page' => 'category'], false) }}" target="_blank" rel="noopener" onclick="event.stopPropagation();" class="inline-flex items-center rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700">{{ __('admin.site_settings.theme.preview_category') }}</a>
-                                            <a href="{{ route('admin.site-settings.theme-editor.preview', ['themeId' => $themeOption['id'], 'page' => 'article'], false) }}" target="_blank" rel="noopener" onclick="event.stopPropagation();" class="inline-flex items-center rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700">{{ __('admin.site_settings.theme.preview_article') }}</a>
-                                            <a href="{{ route('admin.site-settings.theme-editor.edit', ['themeId' => $themeOption['id'], 'page' => 'home'], false) }}" onclick="event.stopPropagation();" class="inline-flex items-center rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100">{{ __('admin.site_settings.theme.editor_home') }}</a>
-                                            <a href="{{ route('admin.site-settings.theme-editor.edit', ['themeId' => $themeOption['id'], 'page' => 'category'], false) }}" onclick="event.stopPropagation();" class="inline-flex items-center rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100">{{ __('admin.site_settings.theme.editor_category') }}</a>
-                                            <a href="{{ route('admin.site-settings.theme-editor.edit', ['themeId' => $themeOption['id'], 'page' => 'article'], false) }}" onclick="event.stopPropagation();" class="inline-flex items-center rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100">{{ __('admin.site_settings.theme.editor_article') }}</a>
-                                        @else
-                                            <span class="inline-flex items-center rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-500">{{ __('admin.site_settings.theme.preview_home') }}</span>
-                                            <span class="inline-flex items-center rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-500">{{ __('admin.site_settings.theme.preview_category') }}</span>
-                                            <span class="inline-flex items-center rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-500">{{ __('admin.site_settings.theme.preview_article') }}</span>
-                                        @endif
-                                        <span class="inline-flex items-center rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-500">{{ __('admin.site_settings.theme.preview_archive') }}</span>
-                                    </div>
+                                    @if(($themeOption['source'] ?? '') === 'installed' && auth('admin')->user()?->canManageProtectedWorkflows())
+                                        <a class="mt-2 inline-flex min-h-11 items-center text-sm font-medium text-blue-700 hover:underline" href="{{ route('admin.site-settings.theme-packages.preview', ['themeId' => $themeOption['id']]) }}">{{ __('admin.theme_packages.preview.title') }}</a>
+                                    @endif
                                 </div>
                             </label>
                         @endforeach
                     </div>
 
-                    <div class="flex justify-end pt-2 border-t border-gray-200">
+                    <div class="flex flex-wrap justify-end gap-3 pt-4 border-t border-gray-200">
+                        @if(auth('admin')->user()?->canManageProtectedWorkflows())
+                            <button type="submit" formaction="{{ route('admin.site-settings.theme-packages.exports.store') }}" class="inline-flex min-h-11 items-center gap-2 rounded-md border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-800 hover:bg-gray-50 active:scale-[.98]">
+                                <i data-lucide="download" class="h-4 w-4" aria-hidden="true"></i>{{ __('admin.theme_packages.export_title') }}
+                            </button>
+                        @endif
                         <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700">
                             <i data-lucide="layout-template" class="w-5 h-5 mr-2"></i>
                             {{ __('admin.site_settings.theme.save') }}
                         </button>
                     </div>
                 </form>
+                @endif
             </div>
-        </details>
+        @if ($showHomepageEditor)
+            </section>
+        @else
+            </details>
+        @endif
 
+        @unless ($showHomepageEditor)
         <details id="site-settings-ads" class="mb-6 bg-white shadow rounded-lg overflow-hidden group">
             <summary class="px-6 py-5 border-b border-gray-200 flex items-center justify-between gap-4 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
                 <div class="flex min-w-0 items-start gap-4">
@@ -751,6 +1063,7 @@
                         </button>
                     </div>
                     @csrf
+                <input type="hidden" name="appearance_revision" value="{{ $appearanceRevision }}">
 
                     <div class="rounded-2xl border border-blue-100 bg-blue-50/60 p-4">
                         <div class="text-sm font-medium text-gray-900">{{ __('admin.site_settings.ads.preview_title') }}</div>
@@ -843,6 +1156,7 @@
                 @php($textAdModules = is_array(old('text_ad_modules')) ? old('text_ad_modules') : $articleDetailTextAds)
                 <form method="POST" action="{{ route('admin.site-settings.text-ads') }}" id="article-text-ad-form" class="mt-8 space-y-6 border-t border-gray-200 pt-8">
                     @csrf
+                <input type="hidden" name="appearance_revision" value="{{ $appearanceRevision }}">
                     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                         <div>
                             <h4 class="text-base font-semibold text-gray-900">{{ __('admin.site_settings.ads.text_section_title') }}</h4>
@@ -983,33 +1297,77 @@
                 </form>
             </div>
         </details>
+        @endunless
     </div>
 @endsection
 
 @push('scripts')
     <script>
         document.addEventListener('DOMContentLoaded', function () {
+            const permalinkPattern = document.getElementById('article-permalink-pattern');
+            const openSiteSettingsTarget = function (targetId, behavior) {
+                const target = targetId ? document.getElementById(targetId) : null;
+
+                if (!target) {
+                    return false;
+                }
+
+                if (target instanceof HTMLDetailsElement) {
+                    target.open = true;
+                }
+
+                target.scrollIntoView({ behavior: behavior || 'smooth', block: 'start' });
+
+                return true;
+            };
+
+            document.querySelectorAll('[data-permalink-preset]').forEach(function (preset) {
+                preset.addEventListener('change', function () {
+                    if (permalinkPattern && preset.checked) {
+                        permalinkPattern.value = preset.value;
+                    }
+                });
+            });
+
             document.querySelectorAll('[data-site-settings-target]').forEach(function (trigger) {
                 trigger.addEventListener('click', function (event) {
                     const targetId = trigger.getAttribute('data-site-settings-target');
-                    const target = targetId ? document.getElementById(targetId) : null;
 
-                    if (!target) {
+                    if (!openSiteSettingsTarget(targetId, 'smooth')) {
                         return;
                     }
 
                     event.preventDefault();
-                    target.open = true;
-                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
                     if (window.history && window.history.pushState) {
                         window.history.pushState(null, '', '#' + targetId);
                     }
                 });
             });
+
+            const openHashTarget = function () {
+                const targetId = window.location.hash.slice(1);
+
+                if (targetId !== '') {
+                    openSiteSettingsTarget(targetId, 'auto');
+                }
+            };
+
+            const requestedTarget = document.querySelector('[data-site-settings-open-target]')
+                ?.getAttribute('data-site-settings-open-target');
+
+            if (requestedTarget) {
+                window.requestAnimationFrame(function () {
+                    openSiteSettingsTarget(requestedTarget, 'auto');
+                });
+            }
+
+            openHashTarget();
+            window.addEventListener('hashchange', openHashTarget);
         });
     </script>
 
+    @if ($showHomepageEditor)
     <template id="homepage-module-template">
         <div class="homepage-module-item rounded-2xl border border-gray-200 bg-white p-4" data-homepage-module-index="__INDEX__">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1017,7 +1375,7 @@
                     <div class="text-sm font-semibold text-gray-900">{{ __('admin.site_settings.homepage.module_title', ['index' => '__NUMBER__']) }}</div>
                     <div class="mt-1 text-xs text-gray-500">{{ __('admin.site_settings.homepage.module_desc') }}</div>
                 </div>
-                <button type="button" class="remove-homepage-module inline-flex items-center rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50">
+                <button type="button" class="remove-homepage-module inline-flex min-h-10 items-center rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50">
                     <i data-lucide="trash-2" class="mr-2 h-4 w-4"></i>
                     {{ __('admin.button.delete') }}
                 </button>
@@ -1194,9 +1552,8 @@
                 bindRemove(item);
                 refreshState();
 
-                if (typeof lucide !== 'undefined') {
-                    lucide.createIcons();
-                }
+                if (window.GeoFlowAdminUi?.refreshIcons) window.GeoFlowAdminUi.refreshIcons(item);
+                else window.lucide?.createIcons?.();
             });
 
             list.querySelectorAll('.homepage-module-item').forEach(bindRemove);
@@ -1204,6 +1561,7 @@
         });
     </script>
 
+    @else
     <template id="article-ad-template">
         <div class="article-ad-item rounded-2xl border border-gray-200 bg-gray-50/70 p-5" data-ad-index="__INDEX__">
             <div class="flex items-center justify-between gap-4">
@@ -1265,7 +1623,7 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', function () {
-            if (typeof lucide !== 'undefined') {
+            if (! window.GeoFlowAdminUi?.refreshIcons && typeof lucide !== 'undefined') {
                 lucide.createIcons();
             }
 
@@ -1310,9 +1668,8 @@
                 bindRemove(adItem);
                 refreshState();
 
-                if (typeof lucide !== 'undefined') {
-                    lucide.createIcons();
-                }
+                if (window.GeoFlowAdminUi?.refreshIcons) window.GeoFlowAdminUi.refreshIcons(adItem);
+                else window.lucide?.createIcons?.();
             });
 
             adList.querySelectorAll('.article-ad-item').forEach(bindRemove);
@@ -1540,9 +1897,8 @@
                     bindColorPicker(linkItem);
                     refreshTextAdLinks(scope);
 
-                    if (typeof lucide !== 'undefined') {
-                        lucide.createIcons();
-                    }
+                    if (window.GeoFlowAdminUi?.refreshIcons) window.GeoFlowAdminUi.refreshIcons(linkItem);
+                    else window.lucide?.createIcons?.();
                 });
             }
 
@@ -1594,9 +1950,8 @@
                 bindTextAdModule(textAdItem);
                 refreshTextAdState();
 
-                if (typeof lucide !== 'undefined') {
-                    lucide.createIcons();
-                }
+                if (window.GeoFlowAdminUi?.refreshIcons) window.GeoFlowAdminUi.refreshIcons(textAdItem);
+                else window.lucide?.createIcons?.();
             });
 
             textAdList.querySelectorAll('.article-text-ad-item').forEach(function (item) {
@@ -1605,4 +1960,5 @@
             refreshTextAdState();
         });
     </script>
+    @endif
 @endpush

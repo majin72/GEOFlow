@@ -14,7 +14,7 @@
             'dateModified' => optional($article->updated_at ?? $article->published_at ?? $article->created_at)->toAtomString(),
             'mainEntityOfPage' => [
                 $schemaAtType => 'WebPage',
-                $schemaAtId => $canonicalUrl ?? route('site.article', $article->slug),
+                $schemaAtId => $canonicalUrl ?? $siteUrls->article($article),
             ],
             'author' => [
                 $schemaAtType => 'Person',
@@ -31,9 +31,7 @@
     @if($article->category)
         <meta property="article:section" content="{{ $article->category->name }}">
     @endif
-    <script type="application/ld+json">
-        {!! json_encode($articleSchema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) !!}
-    </script>
+    <x-json-ld :data="$articleSchema" />
 @endpush
 
 @section('content')
@@ -112,7 +110,7 @@
                     </div>
                     <div class="ne-related-grid">
                         @foreach($relatedArticles as $related)
-                            <a href="{{ route('site.article', $related->slug) }}" class="ne-related-card">
+                            <a href="{{ $siteUrls->article($related) }}" class="ne-related-card">
                                 <span class="ne-related-index">{{ $loop->iteration }}</span>
                                 <span>{{ $related->title }}</span>
                             </a>
@@ -130,7 +128,7 @@
                     </div>
                     <div class="ne-hot-list">
                         @foreach($relatedArticles as $related)
-                            <a href="{{ route('site.article', $related->slug) }}" class="ne-hot-item">
+                            <a href="{{ $siteUrls->article($related) }}" class="ne-hot-item">
                                 <span class="ne-hot-index">{{ $loop->iteration }}</span>
                                 <span>{{ $related->title }}</span>
                             </a>

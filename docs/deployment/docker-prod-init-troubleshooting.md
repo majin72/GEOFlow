@@ -63,7 +63,7 @@ $COMPOSE_PROD run --rm app php artisan optimize
 
 也就是说：命令从容器外的服务器项目目录执行，但实际运行在 `app` 容器内。
 
-`geoflow:install` 是首次安装入口：空库时创建默认管理员；如果检测到已有业务数据，则只补初始化标记，不会写入或覆盖前台演示分类、文章、网站设置、广告和提示词。如果确实需要重置演示内容，再临时设置 `GEOFLOW_SEED_FRONTEND_DEMO=true` 后手动执行 `php artisan db:seed --force`；演示数据默认只补缺，不覆盖已修改的数据，除非额外设置 `GEOFLOW_SEED_FRONTEND_DEMO_OVERWRITE=true`。
+`geoflow:install` 是首次安装入口：空库时创建默认管理员；如果检测到已有业务数据，则只补初始化标记。正式安装与默认 `db:seed` 都不会调用 `FrontendDemoSeeder`，因此不会写入或覆盖前台演示分类、文章、网站设置、广告和提示词。演示数据只允许在测试环境显式调用专用 Seeder。
 
 也可以先进容器后执行：
 
@@ -108,12 +108,13 @@ REDIS_HOST=redis
 
 - 如果直接用服务器 IP 加端口访问，例如 `http://172.29.64.77:18080/geo_admin/login`，则 `APP_URL=http://172.29.64.77:18080`
 - 如果前面有域名和 HTTPS 反向代理，则 `APP_URL=https://你的域名`
+- 直接使用 HTTP 时设置 `SESSION_SECURE_COOKIE=false`，HTTPS 环境设置为 `true`
 - 不要保留 `https://your-domain.com`，这只是示例占位符
 
 如果刚改过 `.env.prod`，需要重建相关容器：
 
 ```bash
-$COMPOSE_PROD up -d --force-recreate app web queue scheduler
+$COMPOSE_PROD up -d --force-recreate app web queue ai-quality-queue ai-quality-backfill-queue knowledge-queue scheduler
 ```
 
 然后查看 Laravel 的真实错误日志：
@@ -172,17 +173,19 @@ $COMPOSE_PROD build
 $COMPOSE_PROD up -d postgres redis
 $COMPOSE_PROD up -d init
 $COMPOSE_PROD logs --tail=200 init
-$COMPOSE_PROD up -d app web queue scheduler reverb
+$COMPOSE_PROD up -d app web queue ai-quality-queue ai-quality-backfill-queue knowledge-queue scheduler reverb
 ```
 
-如果希望一次性启动，也可以执行：
+仅在全新空库首次安装时，可以一次性启动：
 
 ```bash
 $COMPOSE_PROD up -d --build
 ```
 
+已有数据或迁移历史的实例禁止使用该命令升级。请执行 [`DEPLOYMENT.md` 3.1 节](DEPLOYMENT.md#31-受管图片删除升级门禁)的 down、停止排空、一次性确认、迁移、全量新版本启动和 readiness 流程。
+
 首次部署后，如果修改了 `.env.prod`，建议至少重建应用相关容器：
 
 ```bash
-$COMPOSE_PROD up -d --force-recreate app web queue scheduler reverb
+$COMPOSE_PROD up -d --force-recreate app web queue ai-quality-queue ai-quality-backfill-queue knowledge-queue scheduler reverb
 ```

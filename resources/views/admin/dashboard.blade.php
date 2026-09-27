@@ -2,6 +2,7 @@
 
 @section('content')
     @php
+        $canManageProtectedWorkflows = $canManageProtectedWorkflows ?? false;
         $statusStyles = [
             'ready' => 'bg-emerald-100 text-emerald-700',
             'running' => 'bg-blue-100 text-blue-700',
@@ -370,6 +371,44 @@
             ],
         ];
 
+        if (!$canManageProtectedWorkflows) {
+            $demoJourney = array_values(array_filter(
+                $demoJourney,
+                static fn (array $item): bool => $item['href'] !== route('admin.distribution.index'),
+            ));
+            $flowNodes = array_values(array_filter(
+                $flowNodes,
+                static fn (array $item): bool => $item['title'] !== __('admin.dashboard.automation.node_authority_distribution_title'),
+            ));
+            $recommendations = array_values(array_filter(
+                $recommendations,
+                static fn (array $item): bool => $item['href'] !== route('admin.distribution.jobs'),
+            ));
+            $activeRecommendations = array_values(array_filter(
+                $recommendations,
+                static fn (array $recommendation): bool => (int) $recommendation['count'] > 0,
+            ));
+            $healthCards = array_values(array_filter(
+                $healthCards,
+                static fn (array $item): bool => $item['title'] !== __('admin.dashboard.automation.health_distribution_title'),
+            ));
+            $lanes = array_values(array_filter(
+                $lanes,
+                static fn (array $item): bool => $item['title'] !== __('admin.dashboard.automation.lane_multi_title'),
+            ));
+            $lanes = array_map(
+                static function (array $lane): array {
+                    $lane['rows'] = array_values(array_filter(
+                        $lane['rows'],
+                        static fn (array $row): bool => $row['href'] !== route('admin.admin-users.index'),
+                    ));
+
+                    return $lane;
+                },
+                $lanes,
+            );
+        }
+
         $skillResourceCards = [
             [
                 'title' => __('admin.dashboard.skill_resources.template_title'),
@@ -396,24 +435,14 @@
     @endphp
 
     <div class="px-4 sm:px-0">
-        <div class="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-                <h1 class="text-3xl font-bold text-gray-900">{{ __('admin.dashboard.navigation.heading') }}</h1>
-                <p class="mt-1 text-sm leading-6 text-gray-600">{{ __('admin.dashboard.navigation.subtitle') }}</p>
-            </div>
-            <div class="flex flex-wrap gap-2">
-                <a href="{{ route('admin.dashboard') }}" class="inline-flex h-10 items-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
-                    <i data-lucide="refresh-cw" class="mr-2 h-4 w-4"></i>
-                    {{ __('admin.dashboard.refresh') }}
-                </a>
-                <a href="{{ route('admin.tasks.create') }}" class="inline-flex h-10 items-center rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
-                    <i data-lucide="plus" class="mr-2 h-4 w-4"></i>
-                    {{ __('admin.dashboard.quick_start.task_button') }}
-                </a>
-            </div>
-        </div>
+        @include('admin.analytics._page-header', [
+            'title' => __('admin.dashboard.navigation.heading'),
+            'subtitle' => __('admin.dashboard.navigation.subtitle'),
+            'analyticsPage' => 'operations',
+            'showRefresh' => false,
+        ])
 
-        <section class="mb-8 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
+        <section class="mb-8 mt-6 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
             <div class="flex flex-col gap-4 border-b border-gray-100 px-6 py-5 lg:flex-row lg:items-start lg:justify-between">
                 <div>
                     <p class="text-xs font-semibold uppercase tracking-[0.2em] text-blue-600">{{ __('admin.dashboard.quick_start.eyebrow') }}</p>

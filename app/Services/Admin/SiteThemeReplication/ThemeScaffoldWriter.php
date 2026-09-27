@@ -3,18 +3,24 @@
 namespace App\Services\Admin\SiteThemeReplication;
 
 use App\Models\SiteThemeReplication;
-use Illuminate\Support\Facades\Storage;
 
 class ThemeScaffoldWriter
 {
+    public function __construct(
+        private readonly ThemeReplicationStorageGuard $storageGuard,
+        private readonly ThemeReplicationPackagePathGuard $pathGuard,
+    ) {}
+
     /**
      * @param  array<string, mixed>  $blueprint
      * @return array<string, mixed>
      */
     public function write(SiteThemeReplication $replication, int $version, array $blueprint): array
     {
-        $themeId = (string) $replication->theme_id;
-        $root = "geoflow-theme-replications/{$replication->id}/draft/{$version}";
+        $themeId = $this->pathGuard->validatedThemeId((string) $replication->theme_id);
+        $replicationId = $this->pathGuard->positiveInteger($replication->id);
+        $version = $this->pathGuard->positiveInteger($version);
+        $root = "geoflow-theme-replications/{$replicationId}/draft/{$version}";
         $viewsPath = $root.'/views';
         $assetsPath = $root.'/assets';
 
@@ -54,7 +60,7 @@ class ThemeScaffoldWriter
         $fileRecords = [];
         foreach ($files as $relative => $content) {
             $path = $root.'/'.$relative;
-            Storage::disk('local')->put($path, $content);
+            $this->storageGuard->writeStorageFile($path, $content);
             $fileRecords[] = [
                 'path' => $relative,
                 'storage_path' => $path,
@@ -204,7 +210,7 @@ BLADE;
         <a class="rep-brand" href="{{ route('site.home') }}">{{ $siteTitle ?? config('app.name') }}</a>
         <nav class="rep-nav">
             <a href="{{ route('site.home') }}" data-nav-item="home">{{ __('front.nav.home') }}</a>
-            <a href="{{ route('site.archive') }}">{{ __('site.archive_title') }}</a>
+            <a href="{{ route('site.about') }}">关于</a>
         </nav>
     </div>
 </header>
@@ -216,7 +222,9 @@ BLADE;
         return <<<'BLADE'
 <footer class="rep-footer">
     <div class="rep-shell">
+        @include('site.partials.friend-links')
         <div>{{ $siteTitle ?? config('app.name') }}</div>
+        @include('site.partials.footer-filing')
     </div>
 </footer>
 BLADE;
@@ -230,13 +238,13 @@ BLADE;
         <div class="rep-chip">{{ __('site.home_featured_badge') }}</div>
     @endif
     <h2>
-        <a href="{{ route('site.article', $article->slug) }}">{{ $article->title }}</a>
+        <a href="{{ $siteUrls->article($article) }}">{{ $article->title }}</a>
     </h2>
     @if($article->category)
         <div class="rep-meta">{{ $article->category->name }}</div>
     @endif
     <p class="rep-summary">{{ $cardSummaries[$article->id] ?? '' }}</p>
-    <a class="rep-link" href="{{ route('site.article', $article->slug) }}">{{ __('site.home_read_more') }}</a>
+    <a class="rep-link" href="{{ $siteUrls->article($article) }}">{{ __('site.home_read_more') }}</a>
 </article>
 BLADE;
     }

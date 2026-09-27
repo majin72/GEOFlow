@@ -98,7 +98,7 @@ class GenericHttpApiPublisher implements DistributionPublisherInterface
         ];
     }
 
-    public function syncSiteSettings(DistributionChannel $channel): array
+    public function syncSiteSettings(DistributionChannel $channel, ?string $idempotencyKey = null, ?array $settings = null): array
     {
         $config = $channel->resolvedGenericHttpConfig();
         $path = trim((string) $config['generic_settings_path']);
@@ -118,10 +118,10 @@ class GenericHttpApiPublisher implements DistributionPublisherInterface
                 'version' => '1.0',
                 'source' => 'geoflow',
                 'event' => 'site.settings.update',
-                'settings' => $channel->targetSiteSettingsPayload(),
+                'settings' => $settings ?? $channel->targetSiteSettingsPayload(),
             ],
             'site.settings.update',
-            'channel-'.(int) $channel->id.'-settings-v1',
+            $idempotencyKey ?: 'channel-'.(int) $channel->id.'-settings-v1',
             '通用 API 站点设置同步'
         );
 
@@ -237,7 +237,7 @@ class GenericHttpApiPublisher implements DistributionPublisherInterface
             : $request->withBody($wireBody, 'application/json')->send($method, $endpoint);
 
         $this->markSecretUsed($channel, $config);
-        $this->throwIfUnexpectedStatus($response, $operationLabel, $endpoint, $config);
+        $this->throwIfUnexpectedStatus($response, $operationLabel, $config);
 
         return [
             'endpoint' => $endpoint,
@@ -250,17 +250,13 @@ class GenericHttpApiPublisher implements DistributionPublisherInterface
     /**
      * @param  array<string,mixed>  $config
      */
-    private function throwIfUnexpectedStatus(Response $response, string $operationLabel, string $endpoint, array $config): void
+    private function throwIfUnexpectedStatus(Response $response, string $operationLabel, array $config): void
     {
         if (in_array($response->status(), $config['generic_success_statuses'], true)) {
             return;
         }
 
-        $body = html_entity_decode(strip_tags((string) $response->body()), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $body = preg_replace('/\s+/', ' ', trim($body));
-        $summary = is_string($body) && mb_strlen($body) > 300 ? mb_substr($body, 0, 300).'...' : (string) $body;
-
-        throw new RuntimeException($operationLabel.'失败：HTTP '.$response->status().' '.$endpoint.($summary !== '' ? ' '.$summary : ''));
+        throw new RuntimeException($operationLabel.'失败：HTTP '.$response->status());
     }
 
     /**

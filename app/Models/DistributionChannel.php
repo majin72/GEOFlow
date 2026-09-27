@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\Site\ArticlePermalinkPolicy;
 use App\Support\Site\ArticleTextAdPicker;
 use App\Support\Site\HomepageModuleBuilder;
 use App\Support\Site\SiteSettingsBag;
@@ -13,6 +14,16 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class DistributionChannel extends Model
 {
+    public const TYPE_GEOFLOW_AGENT = 'geoflow_agent';
+
+    public const TYPE_HOSTED_SITE = 'hosted_site';
+
+    public const STATUS_ACTIVE = 'active';
+
+    public const STATUS_PAUSED = 'paused';
+
+    public const STATUS_DELETING = 'deleting';
+
     public const MAX_CUSTOM_TEXT_AD_MODULES_PER_PLACEMENT = 5;
 
     public const FRONTEND_EXPERIENCE_CUSTOM = 'custom';
@@ -101,6 +112,9 @@ class DistributionChannel extends Model
             'seo_description_template' => trim((string) ($stored['seo_description_template'] ?? '{description}')),
             'featured_limit' => min(100, max(1, (int) ($stored['featured_limit'] ?? 6))),
             'per_page' => min(200, max(1, (int) ($stored['per_page'] ?? 12))),
+            'article_permalink_policy' => ArticlePermalinkPolicy::fromRaw(
+                $stored[ArticlePermalinkPolicy::SETTING_KEY] ?? null
+            )->toArray(),
         ] + $this->resolvedFrontendExperienceSettings();
     }
 
@@ -124,6 +138,11 @@ class DistributionChannel extends Model
         return self::normalizeFrontendExperienceMode($stored['frontend_experience_mode'] ?? null);
     }
 
+    public function hostedSiteProfile(): HasOne
+    {
+        return $this->hasOne(HostedSiteProfile::class);
+    }
+
     /**
      * @return array{
      *   status:string,
@@ -140,6 +159,10 @@ class DistributionChannel extends Model
      *   supports_homepage_style:bool,
      *   supports_home_carousel_slides:bool,
      *   supports_article_text_ads:bool,
+     *   supports_article_permalink_policy:bool,
+     *   article_permalink_schema_versions:list<int>,
+     *   current_article_permalink_revision:int,
+     *   current_article_permalink_pattern:string,
      *   supports_static_generation:bool,
      *   agent_base_url:string
      * }
@@ -178,6 +201,10 @@ class DistributionChannel extends Model
      *   supports_homepage_style:bool,
      *   supports_home_carousel_slides:bool,
      *   supports_article_text_ads:bool,
+     *   supports_article_permalink_policy:bool,
+     *   article_permalink_schema_versions:list<int>,
+     *   current_article_permalink_revision:int,
+     *   current_article_permalink_pattern:string,
      *   supports_static_generation:bool,
      *   agent_base_url:string
      * }
@@ -199,6 +226,10 @@ class DistributionChannel extends Model
             'supports_homepage_style' => false,
             'supports_home_carousel_slides' => false,
             'supports_article_text_ads' => false,
+            'supports_article_permalink_policy' => false,
+            'article_permalink_schema_versions' => [],
+            'current_article_permalink_revision' => 0,
+            'current_article_permalink_pattern' => '',
             'supports_static_generation' => false,
             'agent_base_url' => '',
         ];
@@ -234,6 +265,13 @@ class DistributionChannel extends Model
             'supports_homepage_style' => (bool) ($cache['supports_homepage_style'] ?? false),
             'supports_home_carousel_slides' => (bool) ($cache['supports_home_carousel_slides'] ?? false),
             'supports_article_text_ads' => (bool) ($cache['supports_article_text_ads'] ?? false),
+            'supports_article_permalink_policy' => (bool) ($cache['supports_article_permalink_policy'] ?? false),
+            'article_permalink_schema_versions' => array_values(array_unique(array_map(
+                'intval',
+                is_array($cache['article_permalink_schema_versions'] ?? null) ? $cache['article_permalink_schema_versions'] : [],
+            ))),
+            'current_article_permalink_revision' => max(0, (int) ($cache['current_article_permalink_revision'] ?? 0)),
+            'current_article_permalink_pattern' => trim((string) ($cache['current_article_permalink_pattern'] ?? '')),
             'supports_static_generation' => (bool) ($cache['supports_static_generation'] ?? false),
             'agent_base_url' => trim((string) ($cache['agent_base_url'] ?? '')),
         ];
@@ -413,7 +451,7 @@ class DistributionChannel extends Model
     {
         $type = (string) ($this->channel_type ?? 'geoflow_agent');
 
-        return in_array($type, ['geoflow_agent', 'wordpress_rest', 'generic_http_api'], true) ? $type : 'geoflow_agent';
+        return in_array($type, ['geoflow_agent', 'wordpress_rest', 'generic_http_api', self::TYPE_HOSTED_SITE], true) ? $type : 'geoflow_agent';
     }
 
     public function isGeoFlowAgent(): bool
@@ -429,6 +467,11 @@ class DistributionChannel extends Model
     public function isGenericHttpApi(): bool
     {
         return $this->channelType() === 'generic_http_api';
+    }
+
+    public function isHostedSite(): bool
+    {
+        return $this->channelType() === self::TYPE_HOSTED_SITE;
     }
 
     /**
@@ -764,6 +807,11 @@ class DistributionChannel extends Model
     public function articleDistributions(): HasMany
     {
         return $this->hasMany(ArticleDistribution::class);
+    }
+
+    public function operations(): HasMany
+    {
+        return $this->hasMany(DistributionChannelOperation::class);
     }
 
     public function logs(): HasMany

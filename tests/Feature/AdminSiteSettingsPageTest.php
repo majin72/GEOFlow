@@ -8,11 +8,15 @@ use App\Models\Author;
 use App\Models\Category;
 use App\Models\SensitiveWord;
 use App\Models\SiteSetting;
+use App\Services\GeoFlow\ArticleRiskScanner;
 use App\Support\AdminWeb;
 use App\Support\Site\SiteThemeCatalog;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use RuntimeException;
 use Tests\TestCase;
 
 class AdminSiteSettingsPageTest extends TestCase
@@ -30,13 +34,18 @@ class AdminSiteSettingsPageTest extends TestCase
             'status' => 'active',
         ]);
 
-        $this->actingAs($admin, 'admin')
+        $response = $this->actingAs($admin, 'admin')
             ->get(route('admin.site-settings.index'))
             ->assertOk()
             ->assertSee(__('admin.site_settings.field_admin_base_path'))
             ->assertSee(__('admin.site_settings.section_home_carousel'))
             ->assertSee(__('admin.site_settings.module_sensitive_words'))
+            ->assertSee(__('admin.site_settings.homepage.section_title'))
+            ->assertSee(route('admin.site-settings.homepage-modules.edit'), false)
+            ->assertDontSee('id="homepage-module-form"', false)
             ->assertSee('value="'.AdminWeb::basePath().'"', false);
+
+        $this->assertSame(1, substr_count($response->getContent(), route('admin.site-settings.homepage-modules.edit')));
     }
 
     public function test_site_settings_page_renders_before_lead_forms_table_is_migrated(): void
@@ -57,6 +66,14 @@ class AdminSiteSettingsPageTest extends TestCase
             ->get(route('admin.site-settings.index'))
             ->assertOk()
             ->assertSee(__('admin.site_settings.page_title'))
+            ->assertSee(__('admin.site_settings.homepage.open_editor'));
+
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.site-settings.homepage-modules.edit'))
+            ->assertOk()
+            ->assertSee(__('admin.site_settings.homepage.page_title'))
+            ->assertSee(__('admin.site_settings.homepage.back_to_settings'))
+            ->assertSee('id="homepage-module-form"', false)
             ->assertSee(__('admin.site_settings.homepage.lead_form_none'));
     }
 
@@ -111,6 +128,7 @@ class AdminSiteSettingsPageTest extends TestCase
             'geoflow-template-18-consulting-insight' => 'GEOFlow 18 Consulting Insight',
             'geoflow-template-19-tech-review' => 'GEOFlow 19 Tech Review',
             'geoflow-template-20-research-journal' => 'GEOFlow 20 Research Journal',
+            'geoflow-template-21-enterprise-signature' => 'GEOFlow 21 Enterprise Signature',
         ];
 
         $catalogIds = collect(app(SiteThemeCatalog::class)->all())
@@ -211,7 +229,7 @@ class AdminSiteSettingsPageTest extends TestCase
             'password' => 'secret-123',
             'email' => 'site-sensitive-admin@example.com',
             'display_name' => 'Site Sensitive Admin',
-            'role' => 'admin',
+            'role' => 'super_admin',
             'status' => 'active',
         ]);
 
@@ -241,6 +259,216 @@ class AdminSiteSettingsPageTest extends TestCase
             ->assertRedirect(route('admin.site-settings.sensitive-words'));
 
         $this->assertDatabaseMissing('sensitive_words', ['word' => '测试敏感词']);
+    }
+
+    public function test_standard_admin_can_view_sensitive_words_but_cannot_mutate_rules(): void
+    {
+        $this->withoutMiddleware(ValidateCsrfToken::class);
+
+        $rule = SensitiveWord::query()->create([
+            'word' => 'read-only rule',
+            'severity' => 'blocked',
+        ]);
+        $admin = Admin::query()->create([
+            'username' => 'sensitive_words_read_only_admin',
+            'password' => 'secret-123',
+            'email' => 'sensitive-words-read-only@example.com',
+            'display_name' => 'Sensitive Words Read Only Admin',
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.site-settings.sensitive-words'))
+            ->assertOk()
+            ->assertSee('read-only rule')
+            ->assertDontSee(route('admin.site-settings.sensitive-words.store'), false)
+            ->assertDontSee(route('admin.site-settings.sensitive-words.update', ['wordId' => $rule->id]), false)
+            ->assertDontSee(route('admin.site-settings.sensitive-words.delete', ['wordId' => $rule->id]), false);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.site-settings.sensitive-words.store'), ['words' => 'forbidden rule'])
+            ->assertForbidden();
+        $this->actingAs($admin, 'admin')
+            ->put(route('admin.site-settings.sensitive-words.update', ['wordId' => $rule->id]), [
+                'word' => 'mutated rule',
+                'severity' => 'warning',
+                'category' => 'sensitive',
+                'is_enabled' => '1',
+            ])
+            ->assertForbidden();
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.site-settings.sensitive-words.delete', ['wordId' => $rule->id]))
+            ->assertForbidden();
+
+        $this->assertDatabaseHas('sensitive_words', [
+            'id' => $rule->id,
+            'word' => 'read-only rule',
+            'severity' => 'blocked',
+        ]);
+        $this->assertDatabaseMissing('sensitive_words', ['word' => 'forbidden rule']);
+    }
+
+    public function test_sensitive_word_rules_can_be_created_and_updated_with_risk_metadata(): void
+    {
+        $this->withoutMiddleware(ValidateCsrfToken::class);
+
+        $admin = Admin::query()->create([
+            'username' => 'risk_rule_admin',
+            'password' => 'secret-123',
+            'email' => 'risk-rule-admin@example.com',
+            'display_name' => 'Risk Rule Admin',
+            'role' => 'super_admin',
+            'status' => 'active',
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.site-settings.sensitive-words.store'), [
+                'words' => "绝对第一\n永久有效",
+                'severity' => 'blocked',
+                'category' => 'absolute_claim',
+                'is_enabled' => '1',
+                'suggestion' => '改为有数据依据的限定表述',
+                'applies_to' => ['title', 'content'],
+            ])
+            ->assertRedirect(route('admin.site-settings.sensitive-words'));
+
+        $rule = SensitiveWord::query()->where('word', '绝对第一')->firstOrFail();
+        $this->assertSame('blocked', $rule->severity);
+        $this->assertSame('absolute_claim', $rule->category);
+        $this->assertTrue($rule->is_enabled);
+        $this->assertSame(['title', 'content'], $rule->applies_to);
+        $this->assertSame('改为有数据依据的限定表述', $rule->suggestion);
+
+        $this->actingAs($admin, 'admin')
+            ->put(route('admin.site-settings.sensitive-words.update', ['wordId' => $rule->id]), [
+                'word' => '绝对领先',
+                'severity' => 'warning',
+                'category' => 'marketing_claim',
+                'is_enabled' => '0',
+                'suggestion' => '补充数据来源',
+                'applies_to' => ['excerpt'],
+            ])
+            ->assertRedirect(route('admin.site-settings.sensitive-words'));
+
+        $rule->refresh();
+        $this->assertSame('绝对领先', $rule->word);
+        $this->assertSame('warning', $rule->severity);
+        $this->assertSame('marketing_claim', $rule->category);
+        $this->assertFalse($rule->is_enabled);
+        $this->assertSame(['excerpt'], $rule->applies_to);
+
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.site-settings.sensitive-words'))
+            ->assertOk()
+            ->assertSee('绝对领先')
+            ->assertSee('补充数据来源');
+    }
+
+    public function test_sensitive_word_batch_validation_is_atomic_and_matches_schema_lengths(): void
+    {
+        $this->withoutMiddleware(ValidateCsrfToken::class);
+
+        $admin = Admin::query()->create([
+            'username' => 'risk_rule_length_admin',
+            'password' => 'secret-123',
+            'email' => 'risk-rule-length-admin@example.com',
+            'display_name' => 'Risk Rule Length Admin',
+            'role' => 'super_admin',
+            'status' => 'active',
+        ]);
+        $tooLongWord = str_repeat('敏', 256);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.site-settings.sensitive-words.store'), [
+                'words' => "must-not-persist\n{$tooLongWord}",
+            ])
+            ->assertRedirect()
+            ->assertSessionHasErrors('words');
+
+        $this->assertDatabaseMissing('sensitive_words', ['word' => 'must-not-persist']);
+
+        $maximumLengthWord = str_repeat('词', 255);
+        $longCategory = str_repeat('c', 100);
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.site-settings.sensitive-words.store'), [
+                'words' => $maximumLengthWord,
+                'category' => $longCategory,
+            ])
+            ->assertRedirect(route('admin.site-settings.sensitive-words'))
+            ->assertSessionDoesntHaveErrors();
+
+        $this->assertDatabaseHas('sensitive_words', [
+            'word' => $maximumLengthWord,
+            'category' => $longCategory,
+        ]);
+    }
+
+    public function test_sensitive_word_mutations_invalidate_the_article_risk_scanner_cache(): void
+    {
+        $this->withoutMiddleware(ValidateCsrfToken::class);
+
+        $admin = Admin::query()->create([
+            'username' => 'risk_cache_admin',
+            'password' => 'secret-123',
+            'email' => 'risk-cache-admin@example.com',
+            'display_name' => 'Risk Cache Admin',
+            'role' => 'super_admin',
+            'status' => 'active',
+        ]);
+        $scanner = app(ArticleRiskScanner::class);
+        $scanner->clearRuleCache();
+
+        $this->assertSame('clean', $scanner->scan(['content' => 'cache boundary term'])['status']);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.site-settings.sensitive-words.store'), [
+                'words' => 'cache boundary term',
+            ])
+            ->assertRedirect(route('admin.site-settings.sensitive-words'));
+
+        $this->assertSame('warning', $scanner->scan(['content' => 'cache boundary term'])['status']);
+
+        $word = SensitiveWord::query()->where('word', 'cache boundary term')->firstOrFail();
+
+        $this->actingAs($admin, 'admin')
+            ->put(route('admin.site-settings.sensitive-words.update', ['wordId' => $word->id]), [
+                'word' => 'updated cache boundary term',
+                'severity' => 'warning',
+                'category' => 'sensitive',
+                'is_enabled' => '1',
+                'suggestion' => '',
+                'applies_to' => [],
+            ])
+            ->assertRedirect(route('admin.site-settings.sensitive-words'));
+
+        $this->assertSame('clean', $scanner->scan(['content' => 'cache boundary term'])['status']);
+        $this->assertSame('warning', $scanner->scan(['content' => 'updated cache boundary term'])['status']);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.site-settings.sensitive-words.delete', ['wordId' => $word->id]))
+            ->assertRedirect(route('admin.site-settings.sensitive-words'));
+
+        $this->assertSame('clean', $scanner->scan(['content' => 'cache boundary term'])['status']);
+    }
+
+    public function test_rolled_back_sensitive_word_mutation_does_not_advance_the_rule_cache_version(): void
+    {
+        Cache::forget(SensitiveWord::RULE_CACHE_VERSION_KEY);
+        $initialVersion = SensitiveWord::ruleCacheVersion();
+
+        try {
+            DB::transaction(function (): void {
+                SensitiveWord::query()->create(['word' => 'rolled back cache term']);
+
+                throw new RuntimeException('force rollback');
+            });
+        } catch (RuntimeException) {
+            // Expected: the transaction and its after-commit callback are discarded together.
+        }
+
+        $this->assertDatabaseMissing('sensitive_words', ['word' => 'rolled back cache term']);
+        $this->assertSame($initialVersion, SensitiveWord::ruleCacheVersion());
     }
 
     public function test_admin_base_path_rejects_unsafe_value(): void
@@ -331,6 +559,137 @@ class AdminSiteSettingsPageTest extends TestCase
         $this->assertSame('Home Banner', $slides[0]['title']);
         $this->assertSame('/article/demo', $slides[0]['link_url']);
         $this->assertTrue($slides[0]['enabled']);
+    }
+
+    public function test_article_detail_ads_reject_protocol_relative_url_without_overwriting_existing_setting(): void
+    {
+        $this->withoutMiddleware(ValidateCsrfToken::class);
+
+        $existingAds = '[{"id":"existing-ad","copy":"Existing copy","button_text":"Existing CTA","button_url":"/existing","enabled":true}]';
+        SiteSetting::query()->create([
+            'setting_key' => 'article_detail_ads',
+            'setting_value' => $existingAds,
+        ]);
+
+        $admin = Admin::query()->create([
+            'username' => 'site_sticky_ads_invalid_admin',
+            'password' => 'secret-123',
+            'email' => 'site-sticky-ads-invalid-admin@example.com',
+            'display_name' => 'Site Sticky Ads Invalid Admin',
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->from(route('admin.site-settings.index'))
+            ->post(route('admin.site-settings.ads'), [
+                'ads' => [[
+                    'name' => 'Unsafe CTA',
+                    'badge' => 'Featured',
+                    'title' => 'Unsafe title',
+                    'copy' => 'Unsafe copy',
+                    'button_text' => 'Open',
+                    'button_url' => '//evil.example/demo',
+                    'enabled' => '1',
+                ]],
+            ])
+            ->assertRedirect(route('admin.site-settings.index'))
+            ->assertSessionHasErrors();
+
+        $this->assertSame(
+            [__('admin.site_settings.ads.validation_required', ['index' => 1])],
+            session('errors')->all()
+        );
+        $this->assertSame(
+            $existingAds,
+            (string) SiteSetting::query()->where('setting_key', 'article_detail_ads')->value('setting_value')
+        );
+    }
+
+    public function test_article_detail_ads_do_not_treat_an_unsafe_url_as_an_empty_row(): void
+    {
+        $this->withoutMiddleware(ValidateCsrfToken::class);
+
+        $existingAds = '[{"id":"existing-ad","copy":"Existing copy","button_text":"Existing CTA","button_url":"/existing","enabled":true}]';
+        SiteSetting::query()->create([
+            'setting_key' => 'article_detail_ads',
+            'setting_value' => $existingAds,
+        ]);
+
+        $admin = Admin::query()->create([
+            'username' => 'site_sticky_ads_unsafe_only_admin',
+            'password' => 'secret-123',
+            'email' => 'site-sticky-ads-unsafe-only-admin@example.com',
+            'display_name' => 'Site Sticky Ads Unsafe Only Admin',
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->from(route('admin.site-settings.index'))
+            ->post(route('admin.site-settings.ads'), [
+                'ads' => [[
+                    'button_url' => '//evil.example/demo',
+                ]],
+            ])
+            ->assertRedirect(route('admin.site-settings.index'))
+            ->assertSessionHasErrors();
+
+        $this->assertSame(
+            $existingAds,
+            (string) SiteSetting::query()->where('setting_key', 'article_detail_ads')->value('setting_value')
+        );
+    }
+
+    public function test_article_detail_ads_save_relative_and_http_urls_in_normalized_form(): void
+    {
+        $this->withoutMiddleware(ValidateCsrfToken::class);
+
+        $admin = Admin::query()->create([
+            'username' => 'site_sticky_ads_admin',
+            'password' => 'secret-123',
+            'email' => 'site-sticky-ads-admin@example.com',
+            'display_name' => 'Site Sticky Ads Admin',
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.site-settings.ads'), [
+                'ads' => [
+                    [
+                        'id' => 'relative-ad',
+                        'name' => 'Relative CTA',
+                        'badge' => 'Internal',
+                        'title' => 'Internal offer',
+                        'copy' => 'Read the internal offer.',
+                        'button_text' => 'Read',
+                        'button_url' => 'offers/demo',
+                        'enabled' => '1',
+                    ],
+                    [
+                        'id' => 'external-ad',
+                        'name' => 'External CTA',
+                        'badge' => 'Partner',
+                        'title' => 'Partner offer',
+                        'copy' => 'Read the partner offer.',
+                        'button_text' => 'Visit',
+                        'button_url' => 'https://partner.example/demo',
+                        'enabled' => '1',
+                    ],
+                ],
+            ])
+            ->assertRedirect(route('admin.site-settings.index'))
+            ->assertSessionHasNoErrors();
+
+        $savedAds = json_decode(
+            (string) SiteSetting::query()->where('setting_key', 'article_detail_ads')->value('setting_value'),
+            true
+        );
+
+        $this->assertIsArray($savedAds);
+        $this->assertSame('/offers/demo', $savedAds[0]['button_url']);
+        $this->assertSame('https://partner.example/demo', $savedAds[1]['button_url']);
     }
 
     public function test_article_detail_text_ads_can_be_saved_updated_and_deleted_without_touching_sticky_ads(): void
@@ -605,7 +964,7 @@ class AdminSiteSettingsPageTest extends TestCase
                     ],
                 ],
             ])
-            ->assertRedirect(route('admin.site-settings.index'));
+            ->assertRedirect(route('admin.site-settings.homepage-modules.edit'));
 
         $modules = json_decode((string) SiteSetting::query()->where('setting_key', 'homepage_modules')->value('setting_value'), true);
         $style = json_decode((string) SiteSetting::query()->where('setting_key', 'homepage_style')->value('setting_value'), true);
@@ -637,7 +996,7 @@ class AdminSiteSettingsPageTest extends TestCase
         ]);
 
         $this->actingAs($admin, 'admin')
-            ->from(route('admin.site-settings.index'))
+            ->from(route('admin.site-settings.homepage-modules.edit'))
             ->post(route('admin.site-settings.homepage-modules'), [
                 'homepage_style' => [
                     'accent_color' => 'blue',
@@ -650,11 +1009,11 @@ class AdminSiteSettingsPageTest extends TestCase
                     ],
                 ],
             ])
-            ->assertRedirect(route('admin.site-settings.index'))
+            ->assertRedirect(route('admin.site-settings.homepage-modules.edit'))
             ->assertSessionHasErrors('homepage_style');
 
         $this->actingAs($admin, 'admin')
-            ->from(route('admin.site-settings.index'))
+            ->from(route('admin.site-settings.homepage-modules.edit'))
             ->post(route('admin.site-settings.homepage-modules'), [
                 'homepage_style' => [
                     'accent_color' => '#2563eb',
@@ -669,11 +1028,11 @@ class AdminSiteSettingsPageTest extends TestCase
                     ],
                 ],
             ])
-            ->assertRedirect(route('admin.site-settings.index'))
+            ->assertRedirect(route('admin.site-settings.homepage-modules.edit'))
             ->assertSessionHasErrors('homepage_modules');
 
         $this->actingAs($admin, 'admin')
-            ->from(route('admin.site-settings.index'))
+            ->from(route('admin.site-settings.homepage-modules.edit'))
             ->post(route('admin.site-settings.homepage-modules'), [
                 'homepage_style' => [
                     'accent_color' => '#2563eb',
@@ -687,11 +1046,11 @@ class AdminSiteSettingsPageTest extends TestCase
                     ],
                 ],
             ])
-            ->assertRedirect(route('admin.site-settings.index'))
+            ->assertRedirect(route('admin.site-settings.homepage-modules.edit'))
             ->assertSessionHasErrors('homepage_modules');
 
         $this->actingAs($admin, 'admin')
-            ->from(route('admin.site-settings.index'))
+            ->from(route('admin.site-settings.homepage-modules.edit'))
             ->post(route('admin.site-settings.homepage-modules'), [
                 'homepage_style' => [
                     'accent_color' => '#2563eb',
@@ -705,7 +1064,7 @@ class AdminSiteSettingsPageTest extends TestCase
                     ],
                 ],
             ])
-            ->assertRedirect(route('admin.site-settings.index'))
+            ->assertRedirect(route('admin.site-settings.homepage-modules.edit'))
             ->assertSessionHasErrors('homepage_modules');
     }
 
@@ -744,7 +1103,7 @@ class AdminSiteSettingsPageTest extends TestCase
                     ],
                 ],
             ])
-            ->assertRedirect(route('admin.site-settings.index'));
+            ->assertRedirect(route('admin.site-settings.homepage-modules.edit'));
 
         $modules = json_decode((string) SiteSetting::query()->where('setting_key', 'homepage_modules')->value('setting_value'), true);
 
@@ -785,7 +1144,7 @@ class AdminSiteSettingsPageTest extends TestCase
                 'homepage_preset' => 'enterprise_brand',
                 'preset_mode' => 'replace',
             ])
-            ->assertRedirect(route('admin.site-settings.index'));
+            ->assertRedirect(route('admin.site-settings.homepage-modules.edit'));
 
         $modules = json_decode((string) SiteSetting::query()->where('setting_key', 'homepage_modules')->value('setting_value'), true);
         $style = json_decode((string) SiteSetting::query()->where('setting_key', 'homepage_style')->value('setting_value'), true);
@@ -854,7 +1213,7 @@ class AdminSiteSettingsPageTest extends TestCase
                 'homepage_preset' => 'content_portal',
                 'preset_mode' => 'append',
             ])
-            ->assertRedirect(route('admin.site-settings.index'));
+            ->assertRedirect(route('admin.site-settings.homepage-modules.edit'));
 
         $modules = json_decode((string) SiteSetting::query()->where('setting_key', 'homepage_modules')->value('setting_value'), true);
         $style = json_decode((string) SiteSetting::query()->where('setting_key', 'homepage_style')->value('setting_value'), true);
@@ -911,7 +1270,7 @@ class AdminSiteSettingsPageTest extends TestCase
                 'homepage_design_json' => (string) json_encode($design, JSON_UNESCAPED_UNICODE),
                 'import_mode' => 'replace',
             ])
-            ->assertRedirect(route('admin.site-settings.index'));
+            ->assertRedirect(route('admin.site-settings.homepage-modules.edit'));
 
         $modules = json_decode((string) SiteSetting::query()->where('setting_key', 'homepage_modules')->value('setting_value'), true);
         $style = json_decode((string) SiteSetting::query()->where('setting_key', 'homepage_style')->value('setting_value'), true);
@@ -999,7 +1358,7 @@ class AdminSiteSettingsPageTest extends TestCase
                 'homepage_design_json' => (string) json_encode($design, JSON_UNESCAPED_UNICODE),
                 'import_mode' => 'append',
             ])
-            ->assertRedirect(route('admin.site-settings.index'));
+            ->assertRedirect(route('admin.site-settings.homepage-modules.edit'));
 
         $modules = json_decode((string) SiteSetting::query()->where('setting_key', 'homepage_modules')->value('setting_value'), true);
         $style = json_decode((string) SiteSetting::query()->where('setting_key', 'homepage_style')->value('setting_value'), true);
@@ -1053,7 +1412,7 @@ class AdminSiteSettingsPageTest extends TestCase
                 'homepage_design_json' => (string) json_encode($design, JSON_UNESCAPED_UNICODE),
                 'import_mode' => 'replace',
             ])
-            ->assertRedirect(route('admin.site-settings.index'));
+            ->assertRedirect(route('admin.site-settings.homepage-modules.edit'));
 
         $modules = json_decode((string) SiteSetting::query()->where('setting_key', 'homepage_modules')->value('setting_value'), true);
 
@@ -1087,21 +1446,21 @@ class AdminSiteSettingsPageTest extends TestCase
         ]);
 
         $this->actingAs($admin, 'admin')
-            ->from(route('admin.site-settings.index'))
+            ->from(route('admin.site-settings.homepage-modules.edit'))
             ->post(route('admin.site-settings.homepage-modules.import'), [
                 'homepage_design_json' => '{"modules":',
                 'import_mode' => 'replace',
             ])
-            ->assertRedirect(route('admin.site-settings.index'))
+            ->assertRedirect(route('admin.site-settings.homepage-modules.edit'))
             ->assertSessionHasErrors('homepage_design_json');
 
         $this->actingAs($admin, 'admin')
-            ->from(route('admin.site-settings.index'))
+            ->from(route('admin.site-settings.homepage-modules.edit'))
             ->post(route('admin.site-settings.homepage-modules.import'), [
                 'homepage_design_json' => '{"style":{"accent":"#2563eb"}}',
                 'import_mode' => 'replace',
             ])
-            ->assertRedirect(route('admin.site-settings.index'))
+            ->assertRedirect(route('admin.site-settings.homepage-modules.edit'))
             ->assertSessionHasErrors('homepage_design_json');
     }
 
@@ -1119,12 +1478,12 @@ class AdminSiteSettingsPageTest extends TestCase
         ]);
 
         $this->actingAs($admin, 'admin')
-            ->from(route('admin.site-settings.index'))
+            ->from(route('admin.site-settings.homepage-modules.edit'))
             ->post(route('admin.site-settings.homepage-modules.preset'), [
                 'homepage_preset' => 'unknown',
                 'preset_mode' => 'replace',
             ])
-            ->assertRedirect(route('admin.site-settings.index'))
+            ->assertRedirect(route('admin.site-settings.homepage-modules.edit'))
             ->assertSessionHasErrors('homepage_preset');
     }
 }

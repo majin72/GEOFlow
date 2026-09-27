@@ -8,11 +8,13 @@ use App\Models\Author;
 use App\Models\Category;
 use App\Models\DistributionChannel;
 use App\Models\DistributionChannelSecret;
+use App\Services\GeoFlow\ArticlePublicationEligibilityService;
 use App\Services\GeoFlow\DistributionOrchestrator;
 use App\Services\GeoFlow\GenericHttpApiPublisher;
 use App\Support\GeoFlow\ApiKeyCrypto;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use RuntimeException;
 use Tests\TestCase;
 
 class GenericHttpApiPublisherTest extends TestCase
@@ -176,6 +178,24 @@ class GenericHttpApiPublisherTest extends TestCase
         $this->assertSame(201, $distribution->remote_meta['generic_http']['status_code'] ?? null);
     }
 
+    public function test_remote_error_bodies_and_target_details_are_redacted(): void
+    {
+        Http::fake([
+            'https://api.example.com/articles' => Http::response('token=super-secret target=10.0.0.9', 500),
+        ]);
+        [, $distribution] = $this->makeDistribution();
+
+        try {
+            app(GenericHttpApiPublisher::class)->publish($distribution, ['article' => []]);
+            $this->fail('Expected publisher failure.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringNotContainsString('super-secret', $exception->getMessage());
+            $this->assertStringNotContainsString('10.0.0.9', $exception->getMessage());
+            $this->assertStringNotContainsString('api.example.com', $exception->getMessage());
+            $this->assertStringContainsString('HTTP 500', $exception->getMessage());
+        }
+    }
+
     /**
      * @param  array<string,mixed>  $configOverrides
      * @param  array<string,mixed>  $distributionOverrides
@@ -242,6 +262,7 @@ class GenericHttpApiPublisherTest extends TestCase
             'action' => 'publish',
             'status' => 'queued',
             'idempotency_key' => 'generic-test-key',
+            'remote_meta' => ['workflow_fence' => app(ArticlePublicationEligibilityService::class)->fence($article)],
         ], $distributionOverrides));
 
         return [$channel, $distribution];

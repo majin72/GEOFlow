@@ -22,20 +22,23 @@ use Laravel\Ai\Promptable;
  * 使用 `max_output_tokens`，Gemini 使用 `maxOutputTokens`。未设置 maxTokens 时不附带该字段，
  * 不影响知识库切片、URL 导入等其他调用方的既有行为。
  */
-#[Timeout(240)]
+#[Timeout(self::PROVIDER_TIMEOUT_SECONDS)]
 class MarkdownContentWriterAgent implements Agent, Conversational, HasProviderOptions, HasTools
 {
     use Promptable;
+
+    public const PROVIDER_TIMEOUT_SECONDS = 240;
 
     /**
      * @param  iterable<int, mixed>  $messages
      * @param  iterable<int, mixed>  $tools
      */
     public function __construct(
-        public string $instructions = '你是专业中文写作助手，请输出高质量、可发布的 Markdown 文章。',
+        public string $instructions = '你是专业文章写作助手，请输出高质量、可发布的 Markdown 文章。最终文章禁止出现 [K1]、[K2][K3] 等内部证据编号、引用占位符或编号引用标记；需要说明依据时使用自然语言。',
         public iterable $messages = [],
         public iterable $tools = [],
         public ?int $maxTokens = null,
+        public bool $separateReasoning = false,
     ) {}
 
     /**
@@ -69,16 +72,19 @@ class MarkdownContentWriterAgent implements Agent, Conversational, HasProviderOp
      */
     public function providerOptions(Lab|string $provider): array
     {
+        $providerKey = $provider instanceof Lab ? $provider->value : $provider;
+        $options = $this->separateReasoning
+            ? ['reasoning_split' => true]
+            : [];
+
         if (is_null($this->maxTokens) || $this->maxTokens <= 0) {
-            return [];
+            return $options;
         }
 
-        $providerKey = $provider instanceof Lab ? $provider->value : $provider;
-
-        return match ($providerKey) {
+        return array_merge($options, match ($providerKey) {
             'gemini' => ['maxOutputTokens' => $this->maxTokens],
             'openai' => ['max_output_tokens' => $this->maxTokens],
             default => ['max_tokens' => $this->maxTokens],
-        };
+        });
     }
 }

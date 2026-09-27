@@ -11,14 +11,17 @@ use App\Models\ArticleImage;
 use App\Models\Author;
 use App\Models\Category;
 use App\Models\DistributionChannel;
+use App\Models\DistributionChannelOperation;
 use App\Models\DistributionChannelSecret;
 use App\Models\DistributionLog;
 use App\Models\Image;
 use App\Models\ImageLibrary;
+use App\Models\LeadForm;
 use App\Models\Prompt;
 use App\Models\SiteSetting;
 use App\Models\Task;
 use App\Models\TitleLibrary;
+use App\Services\GeoFlow\ArticlePublicationEligibilityService;
 use App\Services\GeoFlow\DistributionHttpClient;
 use App\Services\GeoFlow\DistributionOrchestrator;
 use App\Services\GeoFlow\DistributionPayloadBuilder;
@@ -26,14 +29,20 @@ use App\Services\GeoFlow\DistributionRetryPolicy;
 use App\Services\GeoFlow\DistributionSigningService;
 use App\Services\GeoFlow\DistributionTargetSitePackageBuilder;
 use App\Services\GeoFlow\FrontendExperienceInspector;
+use App\Services\GeoFlow\ManagedImageFileService;
 use App\Services\GeoFlow\TaskDistributionChannelSelector;
+use App\Services\GeoFlow\TaskLifecycleService;
+use App\Support\AdminWeb;
 use App\Support\GeoFlow\ApiKeyCrypto;
+use App\Support\Site\ArticlePermalinkPolicy;
 use App\Support\Site\HomepageModuleBuilder;
 use App\Support\Site\SiteSettingsBag;
 use App\Support\Site\SiteThemeCatalog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Schema;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
 use ZipArchive;
@@ -44,10 +53,125 @@ class AdminDistributionPageTest extends TestCase
 
     public function test_admin_can_open_distribution_management_page(): void
     {
+        SiteSetting::query()->create([
+            'setting_key' => 'site_name',
+            'setting_value' => 'GEOFlow 默认官网',
+        ]);
+        LeadForm::query()->create([
+            'name' => '业务咨询',
+            'slug' => 'business-contact',
+            'status' => LeadForm::STATUS_ACTIVE,
+            'fields' => [],
+        ]);
+
+        $response = $this->actingAs($this->admin(), 'admin')
+            ->get(route('admin.distribution.index'))
+            ->assertOk()
+            ->assertSee(__('admin.distribution.page_heading'))
+            ->assertSee(__('admin.distribution.default_site.title'))
+            ->assertSee(__('admin.distribution.default_site.badge'))
+            ->assertSee('GEOFlow 默认官网')
+            ->assertSee(__('admin.distribution.default_site.forms_summary', ['active' => 1, 'total' => 1]))
+            ->assertSee(route('site.home'), false)
+            ->assertSee(route('admin.lead-forms.index'), false)
+            ->assertSee(route('admin.site-settings.index'), false)
+            ->assertSee(__('admin.distribution.button.sync_settings_selected'))
+            ->assertSee(__('admin.distribution.button.sync_settings_all'))
+            ->assertSee(__('admin.distribution.button.create'))
+            ->assertSee(__('admin.distribution.channels_title'));
+
+        $html = $response->getContent();
+        $defaultSitePosition = strpos($html, 'data-default-site-management');
+        $externalChannelsPosition = strpos($html, 'data-external-distribution-channels');
+        $this->assertNotFalse($defaultSitePosition);
+        $this->assertNotFalse($externalChannelsPosition);
+        $this->assertLessThan(
+            $externalChannelsPosition,
+            $defaultSitePosition,
+        );
+    }
+
+    public function test_distribution_pages_share_the_icon_navigation_and_keep_page_actions(): void
+    {
+        config()->set('geoflow.admin_ui_v3_enabled', true);
+        config()->set('geoflow.hosted_sites.enabled', true);
+        config()->set('geoflow.hosted_sites.root_domains', ['sites.test']);
+
+        $admin = $this->admin();
+
+        foreach ([
+            route('admin.distribution.index') => null,
+            route('admin.distribution.hosted-sites.index') => 'hosted-sites',
+            route('admin.distribution.jobs') => 'distribution-jobs',
+            route('admin.distribution.sync-settings-all.preview') => 'sync-all',
+        ] as $url => $activeKey) {
+            $response = $this->actingAs($admin, 'admin')->get($url);
+
+            $response
+                ->assertOk()
+                ->assertSee('data-distribution-navigation', false)
+                ->assertSee(AdminWeb::routePath('admin.distribution.hosted-sites.index'), false)
+                ->assertSee(AdminWeb::routePath('admin.distribution.jobs'), false)
+                ->assertSee(AdminWeb::routePath('admin.distribution.sync-settings-all.preview'), false);
+
+            $document = new \DOMDocument;
+            $document->loadHTML((string) $response->getContent(), LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            $xpath = new \DOMXPath($document);
+            $navigation = $xpath->query('//*[@data-distribution-navigation]')?->item(0);
+            $items = $xpath->query('.//*[@data-distribution-navigation-item]', $navigation);
+            $activeItems = $xpath->query('.//*[@aria-current="page"]', $navigation);
+
+            self::assertNotNull($navigation, $url);
+            self::assertSame(3, $items?->length, $url);
+            self::assertSame(
+                ['hosted-sites', 'distribution-jobs', 'sync-all'],
+                array_map(
+                    static fn (\DOMNode $item): string => (string) $item->attributes?->getNamedItem('data-distribution-navigation-item')?->nodeValue,
+                    iterator_to_array($items),
+                ),
+                $url,
+            );
+            self::assertSame(3, $xpath->query('.//*[@data-distribution-navigation-icon]', $navigation)?->length, $url);
+            self::assertSame($activeKey === null ? 0 : 1, $activeItems?->length, $url);
+
+            if ($activeKey !== null) {
+                self::assertSame(
+                    $activeKey,
+                    $activeItems?->item(0)?->attributes?->getNamedItem('data-distribution-navigation-item')?->nodeValue,
+                    $url,
+                );
+            }
+
+            if ($activeKey === null) {
+                $response
+                    ->assertSee('data-selected-sync-open', false)
+                    ->assertSee('href="'.route('admin.distribution.create').'"', false);
+            }
+
+            if ($activeKey === 'hosted-sites') {
+                $response->assertSee('href="'.route('admin.distribution.hosted-sites.create').'"', false);
+            }
+        }
+
+        foreach (['zh_CN', 'en', 'ja', 'es', 'ru', 'pt_BR'] as $locale) {
+            App::setLocale($locale);
+
+            foreach (['admin_pages.hosted_sites', 'admin.distribution.button.jobs', 'admin.distribution.button.sync_settings_all'] as $key) {
+                self::assertNotSame($key, __($key), $locale.': '.$key);
+            }
+        }
+    }
+
+    public function test_distribution_index_renders_default_site_before_lead_forms_are_migrated(): void
+    {
+        Schema::dropIfExists('lead_submissions');
+        Schema::dropIfExists('lead_forms');
+
         $this->actingAs($this->admin(), 'admin')
             ->get(route('admin.distribution.index'))
             ->assertOk()
-            ->assertSee(__('admin.distribution.page_heading'));
+            ->assertSee(__('admin.distribution.default_site.title'))
+            ->assertSee(__('admin.distribution.default_site.forms_summary', ['active' => 0, 'total' => 0]));
     }
 
     public function test_distribution_index_selected_sync_modal_shows_frontend_sync_summary(): void
@@ -141,10 +265,16 @@ class AdminDistributionPageTest extends TestCase
         $this->actingAs($admin, 'admin')
             ->get(route('admin.distribution.index'))
             ->assertOk()
-            ->assertSee('渠道总数')
-            ->assertSee('活跃渠道')
+            ->assertSee(__('admin.distribution.stats.total'))
+            ->assertSee(__('admin.distribution.stats.active'))
             ->assertSee('待处理分发')
             ->assertSee('失败分发')
+            ->assertSee('data-distribution-stats', false)
+            ->assertSeeInOrder([
+                'class="flex flex-col items-center justify-center rounded-lg bg-white p-5 text-center shadow" data-distribution-stat',
+                __('admin.distribution.stats.total'),
+                'class="mt-2 text-2xl font-semibold tabular-nums text-gray-900"',
+            ], false)
             ->assertDontSee('admin.distribution.stats.')
             ->assertDontSee('admin.button.reset');
 
@@ -1343,6 +1473,7 @@ class AdminDistributionPageTest extends TestCase
         $report = app(FrontendExperienceInspector::class)->inspect($channel->fresh(), true);
         $this->assertSame(DistributionChannel::FRONTEND_EXPERIENCE_INHERIT_DEFAULT, $report['channel']['frontend_experience_mode']);
         $this->assertContains('hero', $report['target_package']['supported_modules']);
+        $this->assertContains('/robots.txt', $report['target_package']['supported_routes']);
         $this->assertSame('not_checked', $report['remote_target']['status']);
         $this->assertArrayHasKey('sync_summary', $report['channel']);
         $this->assertSame('missing_secret', app(FrontendExperienceInspector::class)->inspect($channel->fresh(), true, true)['remote_target']['status']);
@@ -1620,6 +1751,7 @@ class AdminDistributionPageTest extends TestCase
 
     public function test_sync_settings_preview_pages_cover_all_and_selected_channels(): void
     {
+        config()->set('geoflow.admin_ui_v3_enabled', true);
         $admin = $this->admin();
 
         $first = DistributionChannel::query()->create([
@@ -1647,6 +1779,9 @@ class AdminDistributionPageTest extends TestCase
         $this->actingAs($admin, 'admin')
             ->get(route('admin.distribution.sync-settings-all.preview'))
             ->assertOk()
+            ->assertSee('data-page-icon="git-compare-arrows"', false)
+            ->assertSee(__('admin_pages.distribution_sync_preview'))
+            ->assertSee('data-gf-page-heading="hidden"', false)
             ->assertSee('预览一号站')
             ->assertSee('预览二号站')
             ->assertDontSee('预览暂停站')
@@ -1657,6 +1792,9 @@ class AdminDistributionPageTest extends TestCase
                 'channel_ids' => [(int) $second->id],
             ])
             ->assertOk()
+            ->assertSee('data-page-icon="git-compare-arrows"', false)
+            ->assertSee(__('admin_pages.distribution_sync_preview'))
+            ->assertSee('data-gf-page-heading="hidden"', false)
             ->assertDontSee('预览一号站')
             ->assertSee('预览二号站')
             ->assertSee('name="channel_ids[]"', false);
@@ -2255,6 +2393,49 @@ class AdminDistributionPageTest extends TestCase
         ]);
     }
 
+    public function test_active_channel_operation_blocks_status_and_secret_mutations(): void
+    {
+        $admin = $this->admin();
+        $channel = DistributionChannel::query()->create([
+            'name' => '租约保护渠道',
+            'domain' => 'lease-guard.example.com',
+            'endpoint_url' => 'https://lease-guard.example.com',
+            'status' => 'active',
+        ]);
+        $secret = DistributionChannelSecret::query()->create([
+            'distribution_channel_id' => (int) $channel->id,
+            'key_id' => 'lease-guard-secret',
+            'secret_ciphertext' => app(ApiKeyCrypto::class)->encrypt('lease-guard-value'),
+            'status' => 'active',
+        ]);
+        $operation = DistributionChannelOperation::query()->create([
+            'distribution_channel_id' => (int) $channel->id,
+            'token' => 'lease-guard-operation',
+            'operation' => 'article_publish',
+            'started_at' => now(),
+            'expires_at' => now()->addMinute(),
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.distribution.pause', ['channelId' => (int) $channel->id]))
+            ->assertRedirect(route('admin.distribution.show', ['channelId' => (int) $channel->id]))
+            ->assertSessionHasErrors();
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.distribution.rotate-secret', ['channelId' => (int) $channel->id]))
+            ->assertRedirect(route('admin.distribution.show', ['channelId' => (int) $channel->id]))
+            ->assertSessionHasErrors();
+
+        $this->assertSame('active', $channel->fresh()->status);
+        $this->assertSame('active', $secret->fresh()->status);
+        $this->assertSame(1, DistributionChannelSecret::query()->where('distribution_channel_id', $channel->id)->count());
+
+        $operation->forceFill(['expires_at' => now()->subSecond()])->save();
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.distribution.pause', ['channelId' => (int) $channel->id]))
+            ->assertRedirect(route('admin.distribution.show', ['channelId' => (int) $channel->id]));
+        $this->assertSame('paused', $channel->fresh()->status);
+    }
+
     public function test_admin_can_rotate_distribution_channel_secret_once(): void
     {
         $channel = DistributionChannel::query()->create([
@@ -2413,8 +2594,7 @@ class AdminDistributionPageTest extends TestCase
             ->post(route('admin.distribution.reveal-secret', ['channelId' => (int) $channel->id]), [
                 'password' => 'secret-123',
             ])
-            ->assertRedirect()
-            ->assertSessionHasErrors('password')
+            ->assertForbidden()
             ->assertSessionMissing('distribution_secret');
     }
 
@@ -2775,8 +2955,24 @@ class AdminDistributionPageTest extends TestCase
         $this->assertStringContainsString('class="target-theme-toutiao"', $staticIndex);
         $this->assertStringNotContainsString('<style>', $staticIndex);
         $this->assertStringNotContainsString('</style>', $staticIndex);
-        $this->assertStringContainsString('# 远程门户', (string) $zip->getFromName('llms.txt'));
+        $llmsText = (string) $zip->getFromName('llms.txt');
+        $this->assertStringContainsString('# 远程门户', $llmsText);
+        $this->assertStringContainsString('[XML Sitemap](https://example.com/sitemap.xml)', $llmsText);
+        $this->assertStringContainsString('[Text Sitemap](https://example.com/sitemap.txt)', $llmsText);
+        $robotsText = (string) $zip->getFromName('robots.txt');
+        $this->assertStringContainsString('Sitemap: https://example.com/sitemap.txt', $robotsText);
+        $this->assertStringContainsString('Disallow: /storage/', $robotsText);
+        $this->assertStringContainsString('Disallow: /*.jpg$', $robotsText);
+        $this->assertStringContainsString("User-agent: facebookexternalhit\nDisallow: /", $robotsText);
         $this->assertStringContainsString('https://example.com/', (string) $zip->getFromName('sitemap.txt'));
+        $sitemapXml = (string) $zip->getFromName('sitemap.xml');
+        $this->assertStringContainsString('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">', $sitemapXml);
+        $this->assertStringContainsString('<loc>https://example.com/</loc>', $sitemapXml);
+        $this->assertNotFalse(@simplexml_load_string($sitemapXml));
+        $sitemapShardXml = (string) $zip->getFromName('sitemaps/pages-1.xml');
+        $this->assertStringContainsString('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">', $sitemapShardXml);
+        $this->assertStringContainsString('<loc>https://example.com/</loc>', $sitemapShardXml);
+        $this->assertNotFalse(@simplexml_load_string($sitemapShardXml));
         $this->assertFalse($zip->locateName('README.md'));
 
         $siteCss = (string) $zip->getFromName('assets/css/site.css');
@@ -2797,12 +2993,14 @@ class AdminDistributionPageTest extends TestCase
         $this->assertStringContainsString('function renderHomeCarouselSlides', $frontController);
         $this->assertStringContainsString('function renderHomepageModules', $frontController);
         $this->assertStringContainsString('function renderHomepageModule', $frontController);
-        $this->assertStringContainsString("'capability_version' => '1.2'", $frontController);
+        $this->assertStringContainsString("'capability_version' => '1.3'", $frontController);
         $this->assertStringContainsString("'package_version' => (string) (\$config['package_version'] ?? '')", $frontController);
         $this->assertStringContainsString("'current_settings' => [", $frontController);
         $this->assertStringContainsString("'homepage_modules_count' => count(\$homepageModules)", $frontController);
         $this->assertStringContainsString("'home_carousel_slides_count' => count(\$carouselSlides)", $frontController);
         $this->assertStringContainsString("'article_text_ads_count' => count(\$articleTextAds)", $frontController);
+        $this->assertStringContainsString("'supports_article_permalink_policy' => true", $frontController);
+        $this->assertStringContainsString("'article_permalink_schema_versions' => [1]", $frontController);
         $this->assertStringContainsString("'metric_band'", $frontController);
         $this->assertStringContainsString("'chart_band'", $frontController);
         $this->assertStringContainsString("'feature_grid'", $frontController);
@@ -2819,7 +3017,11 @@ class AdminDistributionPageTest extends TestCase
         $rootHtaccess = (string) $zip->getFromName('.htaccess');
         $this->assertStringContainsString('config\\.php', $rootHtaccess);
         $this->assertStringContainsString('storage/', $rootHtaccess);
+        $this->assertStringContainsString('RewriteRule ^article(?:/.*)?$ index.php [L,QSA]', $rootHtaccess);
         $this->assertStringContainsString('[F,L]', $rootHtaccess);
+
+        $publicHtaccess = (string) $zip->getFromName('public/.htaccess');
+        $this->assertStringContainsString('RewriteRule ^article(?:/.*)?$ index.php [L,QSA]', $publicHtaccess);
 
         $storageHtaccess = (string) $zip->getFromName('storage/.htaccess');
         $this->assertStringContainsString('Require all denied', $storageHtaccess);
@@ -2834,6 +3036,7 @@ class AdminDistributionPageTest extends TestCase
         $nginxRewrite = (string) $zip->getFromName('nginx.rewrite.conf');
         $this->assertStringContainsString('location = /', $nginxRewrite);
         $this->assertStringContainsString('rewrite ^ /index.php last;', $nginxRewrite);
+        $this->assertStringContainsString('location ~ ^/article(?:/.*)?$', $nginxRewrite);
         $this->assertStringContainsString('location /', $nginxRewrite);
         $this->assertStringContainsString('try_files $uri /index.php?$query_string;', $nginxRewrite);
         $this->assertStringNotContainsString('try_files $uri $uri/ /index.php?$query_string;', $nginxRewrite);
@@ -2842,6 +3045,7 @@ class AdminDistributionPageTest extends TestCase
         $this->assertStringContainsString('rewrite ^/?$ /index.php last;', $btRewrite);
         $this->assertStringContainsString('rewrite ^/(geoflow-agent/.*)$ /index.php/$1 last;', $btRewrite);
         $this->assertStringContainsString('rewrite ^/(article/.*)$ /index.php/$1 last;', $btRewrite);
+        $this->assertStringContainsString('rewrite ^/(.+)$ /index.php/$1 last;', $btRewrite);
 
         $frontController = (string) $zip->getFromName('public/index.php');
         $this->assertStringContainsString('/geoflow-agent/v1/health', $frontController);
@@ -2893,8 +3097,10 @@ class AdminDistributionPageTest extends TestCase
         $this->assertStringContainsString('function staticSitePath', $frontController);
         $this->assertStringContainsString('function frontSitePath', $frontController);
         $this->assertStringContainsString('function rebuildStaticSite', $frontController);
-        $this->assertStringContainsString('function pruneStaticArticlePages', $frontController);
-        $this->assertStringContainsString('pruneStaticArticlePages($config, $activeSlugs)', $frontController);
+        $this->assertStringContainsString('function resolveArticlePermalink', $frontController);
+        $this->assertStringContainsString('function articlePermalinkPath', $frontController);
+        $this->assertStringContainsString('function staticManifestFile', $frontController);
+        $this->assertStringContainsString('function pruneStaticCache', $frontController);
         $this->assertStringContainsString('function frontAssetPath', $frontController);
         $this->assertStringContainsString('function jsonLdScript', $frontController);
         $this->assertStringContainsString('function localizeArticleAssets', $frontController);
@@ -2911,17 +3117,26 @@ class AdminDistributionPageTest extends TestCase
         $this->assertStringContainsString('article_storage_not_writable', $frontController);
         $this->assertStringContainsString('site_settings_not_writable', $frontController);
         $this->assertStringContainsString('function renderLlmsText', $frontController);
+        $this->assertStringContainsString('function renderSitemapXml', $frontController);
+        $this->assertStringContainsString('function renderSitemapShard', $frontController);
+        $this->assertStringContainsString('function publicSitemapUrlLimit', $frontController);
+        $this->assertStringContainsString('function xmlResponse', $frontController);
+        $this->assertStringContainsString('function renderRobotsText', $frontController);
+        $this->assertStringContainsString('function robotsBlockedPaths', $frontController);
         $this->assertStringContainsString('function renderSitemapText', $frontController);
         $this->assertStringContainsString('function maxAssetBytes', $frontController);
-        $this->assertStringContainsString('stream_context_create', $frontController);
+        $this->assertStringNotContainsString('stream_context_create', $frontController);
         $this->assertStringContainsString("writeStaticFile(\$config, 'llms.txt'", $frontController);
+        $this->assertStringContainsString("writeStaticFile(\$config, 'robots.txt'", $frontController);
         $this->assertStringContainsString("writeStaticFile(\$config, 'sitemap.txt'", $frontController);
+        $this->assertStringContainsString('textResponse(renderRobotsText($config))', $frontController);
         $this->assertStringContainsString('textResponse(renderLlmsText($config))', $frontController);
+        $this->assertStringContainsString('xmlResponse(renderSitemapXml($config))', $frontController);
         $this->assertStringContainsString("writeStaticFile(\$config, 'index.html'", $frontController);
-        $this->assertStringContainsString("writeStaticFile(\$config, 'article/'.safeFileName(\$slug).'/index.html'", $frontController);
+        $this->assertStringContainsString('writeStaticCacheFile($config, $cachePath', $frontController);
         $this->assertStringContainsString('rebuildStaticSite($config)', $frontController);
         $this->assertStringContainsString("'removed' => \$removed", $frontController);
-        $this->assertStringContainsString("frontSiteUrl(\$config, '/article/'.rawurlencode(\$slug))", $frontController);
+        $this->assertStringContainsString('frontSiteUrl($config, articlePermalinkPath($config, $article))', $frontController);
 
         $zip->close();
         unlink($zipPath);
@@ -2967,6 +3182,11 @@ class AdminDistributionPageTest extends TestCase
         $zip = new ZipArchive;
         $this->assertTrue($zip->open($package['path']));
         $this->assertTrue($zip->extractTo($extractPath));
+        $this->assertStringContainsString(
+            "'timezone' => ".var_export((string) config('app.timezone', 'UTC'), true),
+            (string) $zip->getFromName('config.php'),
+        );
+        $this->assertStringContainsString('new DateTimeZone($timezone', (string) $zip->getFromName('public/index.php'));
         $zip->close();
 
         $staticIndex = (string) file_get_contents($extractPath.'/index.html');
@@ -2976,13 +3196,22 @@ class AdminDistributionPageTest extends TestCase
 
         $server = new Process([PHP_BINARY, '-S', '127.0.0.1:'.$port, '-t', $extractPath.'/public'], $extractPath);
         $server->start();
+        config(['geoflow.outbound_private_targets' => ['127.0.0.1:'.$port]]);
 
         try {
             $this->waitForHttpServer($baseUrl);
 
+            $robots = Http::timeout(3)->get($baseUrl.'/robots.txt');
+            $this->assertSame(200, $robots->status());
+            $this->assertStringContainsString('Disallow: /storage/', $robots->body());
+            $this->assertStringContainsString("User-agent: facebookexternalhit\nDisallow: /", $robots->body());
+            $this->assertStringContainsString('Sitemap: '.$baseUrl.'/sitemap.txt', $robots->body());
+
             $httpClient = app(DistributionHttpClient::class);
             $capabilities = $httpClient->frontendCapabilities($channel->fresh());
-            $this->assertSame('1.2', $capabilities['capability_version']);
+            $this->assertSame('1.3', $capabilities['capability_version']);
+            $this->assertTrue((bool) ($capabilities['supports_article_permalink_policy'] ?? false));
+            $this->assertSame([1], $capabilities['article_permalink_schema_versions'] ?? []);
             $this->assertSame(9, (int) ($capabilities['current_settings']['homepage_modules_count'] ?? 0));
             $this->assertSame(1, (int) ($capabilities['current_settings']['home_carousel_slides_count'] ?? 0));
             $this->assertContains('custom_html', $capabilities['current_settings']['homepage_module_types'] ?? []);
@@ -3005,6 +3234,171 @@ class AdminDistributionPageTest extends TestCase
                 $this->assertStringContainsString($moduleClass, $runtimeHome);
             }
             $this->assertStringContainsString('Runtime Custom Heading', $runtimeHome);
+        } finally {
+            $server->stop(0);
+            if (is_file($package['path'])) {
+                unlink($package['path']);
+            }
+            $this->removeDirectory($extractPath);
+        }
+    }
+
+    public function test_target_site_package_uses_custom_permalink_for_publish_static_manifest_and_legacy_redirect(): void
+    {
+        $port = $this->freeTcpPort();
+        $baseUrl = 'http://127.0.0.1:'.$port;
+        $extractPath = sys_get_temp_dir().'/geoflow-permalink-runtime-'.uniqid();
+        $initialPolicy = ArticlePermalinkPolicy::defaults()->activate('/{slug}.html', now()->toIso8601String());
+        $channel = DistributionChannel::query()->create([
+            'name' => 'Permalink Runtime Target',
+            'domain' => '127.0.0.1',
+            'endpoint_url' => $baseUrl,
+            'channel_type' => DistributionChannel::TYPE_GEOFLOW_AGENT,
+            'site_settings' => [ArticlePermalinkPolicy::SETTING_KEY => $initialPolicy->toArray()],
+            'channel_config' => [
+                DistributionChannel::FRONTEND_CAPABILITIES_CACHE_KEY => [
+                    'status' => 'ok',
+                    'reachable' => true,
+                    'supports_article_permalink_policy' => true,
+                    'article_permalink_schema_versions' => [1],
+                    'current_article_permalink_revision' => 1,
+                    'current_article_permalink_pattern' => '/{slug}.html',
+                ],
+            ],
+            'status' => DistributionChannel::STATUS_ACTIVE,
+        ]);
+        DistributionChannelSecret::query()->create([
+            'distribution_channel_id' => (int) $channel->id,
+            'key_id' => 'gfk_permalink_runtime',
+            'secret_ciphertext' => app(ApiKeyCrypto::class)->encrypt('gfsec_permalink_runtime_secret'),
+            'status' => 'active',
+            'scopes' => ['article.publish', 'site.settings.update', 'frontend.capabilities'],
+        ]);
+        $fixtures = $this->taskFixtures();
+        $article = Article::query()->create([
+            'title' => 'Permalink Runtime Article',
+            'slug' => 'permalink-runtime-article',
+            'excerpt' => 'Permalink runtime excerpt',
+            'content' => 'Permalink runtime content',
+            'category_id' => (int) $fixtures['category']->id,
+            'author_id' => (int) $fixtures['author']->id,
+            'status' => 'published',
+            'review_status' => 'approved',
+            'published_at' => now(),
+        ]);
+        $distribution = ArticleDistribution::query()->create([
+            'article_id' => (int) $article->id,
+            'distribution_channel_id' => (int) $channel->id,
+            'action' => 'publish',
+            'status' => 'pending',
+            'idempotency_key' => 'permalink-runtime-publish',
+        ]);
+
+        $package = app(DistributionTargetSitePackageBuilder::class)->build(
+            $channel,
+            'gfk_permalink_runtime',
+            'gfsec_permalink_runtime_secret',
+        );
+        $zip = new ZipArchive;
+        $this->assertTrue($zip->open($package['path']));
+        $this->assertTrue($zip->extractTo($extractPath));
+        $zip->close();
+
+        $server = new Process([PHP_BINARY, '-S', '127.0.0.1:'.$port, '-t', $extractPath.'/public'], $extractPath);
+        $server->start();
+        config(['geoflow.outbound_private_targets' => ['127.0.0.1:'.$port]]);
+
+        try {
+            $this->waitForHttpServer($baseUrl);
+            $legacyStaticDirectory = $extractPath.'/article/permalink-runtime-article';
+            $this->assertTrue(mkdir($legacyStaticDirectory, 0755, true));
+            $this->assertNotFalse(file_put_contents($legacyStaticDirectory.'/index.html', 'legacy public article'));
+            $payload = app(DistributionPayloadBuilder::class)->build($article);
+            $publishResult = app(DistributionHttpClient::class)->send($distribution->fresh(), $payload);
+            $this->assertSame($baseUrl.'/permalink-runtime-article.html', $publishResult['remote_url']);
+            $this->assertFileDoesNotExist($legacyStaticDirectory.'/index.html');
+            $retiredStaticFiles = glob($extractPath.'/storage/retired-static/*.html') ?: [];
+            $this->assertCount(1, $retiredStaticFiles);
+            $this->assertSame('legacy public article', file_get_contents($retiredStaticFiles[0]));
+
+            $canonical = Http::timeout(3)->get($baseUrl.'/permalink-runtime-article.html');
+            $canonical->throw();
+            $this->assertStringContainsString('Permalink Runtime Article', $canonical->body());
+
+            $legacy = Http::withoutRedirecting()->timeout(3)->get($baseUrl.'/article/permalink-runtime-article');
+            $this->assertSame(301, $legacy->status());
+            $this->assertSame('/permalink-runtime-article.html', $legacy->header('Location'));
+
+            $manifest = json_decode((string) file_get_contents($extractPath.'/storage/static-manifest.json'), true);
+            $this->assertArrayHasKey('/permalink-runtime-article.html', $manifest['entries'] ?? []);
+            $activeStatePath = $extractPath.'/storage/active-site-state.json';
+            $activeState = json_decode((string) file_get_contents($activeStatePath), true);
+            $this->assertSame(1, data_get($activeState, 'settings.article_permalink_policy.revision'));
+            $this->assertSame(1, data_get($activeState, 'manifest.revision'));
+            $this->assertArrayHasKey('/permalink-runtime-article.html', data_get($activeState, 'manifest.entries', []));
+
+            $nextPolicy = $initialPolicy->activate('/article/{id}.html', now()->toIso8601String());
+            $settings = is_array($channel->site_settings) ? $channel->site_settings : [];
+            $settings[ArticlePermalinkPolicy::SETTING_KEY] = $nextPolicy->toArray();
+            $channel->forceFill(['site_settings' => $settings])->save();
+
+            $activeStateBackup = $activeStatePath.'.backup';
+            $staticIndexBeforeFailedActivation = (string) file_get_contents($extractPath.'/index.html');
+            $this->assertTrue(rename($activeStatePath, $activeStateBackup));
+            $this->assertTrue(mkdir($activeStatePath));
+            try {
+                app(DistributionHttpClient::class)->syncSiteSettings($channel->fresh());
+                $this->fail('A non-writable active state must reject settings activation.');
+            } catch (\Throwable) {
+                $this->assertSame($staticIndexBeforeFailedActivation, (string) file_get_contents($extractPath.'/index.html'));
+                $legacyPolicy = json_decode((string) file_get_contents($extractPath.'/storage/site-settings.json'), true);
+                $this->assertSame(1, data_get($legacyPolicy, 'article_permalink_policy.revision'));
+            } finally {
+                $this->assertTrue(rmdir($activeStatePath));
+                $this->assertTrue(rename($activeStateBackup, $activeStatePath));
+            }
+
+            $syncResult = app(DistributionHttpClient::class)->syncSiteSettings($channel->fresh());
+            $this->assertSame(2, $syncResult['article_permalink_revision'] ?? null);
+            $activeState = json_decode((string) file_get_contents($activeStatePath), true);
+            $this->assertSame(2, data_get($activeState, 'settings.article_permalink_policy.revision'));
+            $this->assertSame(2, data_get($activeState, 'manifest.revision'));
+            $this->assertArrayHasKey('/article/'.$article->id.'.html', data_get($activeState, 'manifest.entries', []));
+
+            $retired = Http::withoutRedirecting()->timeout(3)->get($baseUrl.'/permalink-runtime-article.html?source=legacy');
+            $this->assertSame(301, $retired->status());
+            $this->assertSame('/article/'.$article->id.'.html?source=legacy', $retired->header('Location'));
+            $current = Http::timeout(3)->get($baseUrl.'/article/'.$article->id.'.html');
+            $current->throw();
+            $this->assertStringContainsString('Permalink Runtime Article', $current->body());
+
+            $currentPath = '/article/'.$article->id.'.html';
+            foreach ([
+                ['/article/{slug}', '/article/permalink-runtime-article'],
+                ['/article/{id}-{slug}.html', '/article/'.$article->id.'-permalink-runtime-article.html'],
+                ['/article/{category}/{slug}.html', '/article/'.$fixtures['category']->slug.'/permalink-runtime-article.html'],
+                ['/article/{year}/{month}/{slug}.html', '/article/'.$article->created_at->format('Y/m').'/permalink-runtime-article.html'],
+            ] as [$pattern, $expectedPath]) {
+                $nextPolicy = $nextPolicy->activate($pattern, now()->toIso8601String());
+                $settings[ArticlePermalinkPolicy::SETTING_KEY] = $nextPolicy->toArray();
+                $channel->forceFill(['site_settings' => $settings])->save();
+
+                $syncResult = app(DistributionHttpClient::class)->syncSiteSettings($channel->fresh());
+                $this->assertSame($nextPolicy->revision, $syncResult['article_permalink_revision'] ?? null);
+                $presetPage = Http::timeout(3)->get($baseUrl.$expectedPath);
+                $presetPage->throw();
+                $this->assertStringContainsString('Permalink Runtime Article', $presetPage->body());
+                $previous = Http::withoutRedirecting()->timeout(3)->get($baseUrl.$currentPath);
+                $this->assertSame(301, $previous->status());
+                $this->assertSame($expectedPath, $previous->header('Location'));
+                $manifest = json_decode((string) file_get_contents($extractPath.'/storage/static-manifest.json'), true);
+                $this->assertArrayHasKey($expectedPath, $manifest['entries'] ?? []);
+                $activeState = json_decode((string) file_get_contents($activeStatePath), true);
+                $this->assertSame($nextPolicy->revision, data_get($activeState, 'settings.article_permalink_policy.revision'));
+                $this->assertSame($nextPolicy->revision, data_get($activeState, 'manifest.revision'));
+                $this->assertArrayHasKey($expectedPath, data_get($activeState, 'manifest.entries', []));
+                $currentPath = $expectedPath;
+            }
         } finally {
             $server->stop(0);
             if (is_file($package['path'])) {
@@ -3112,12 +3506,13 @@ class AdminDistributionPageTest extends TestCase
         $this->assertStringContainsString('rewrite ^/geoflow-target-site/?$ /geoflow-target-site/index.php last;', $btRewrite);
         $this->assertStringContainsString('rewrite ^/geoflow-target-site/(geoflow-agent/.*)$ /geoflow-target-site/index.php/$1 last;', $btRewrite);
         $this->assertStringContainsString('rewrite ^/geoflow-target-site/(article/.*)$ /geoflow-target-site/index.php/$1 last;', $btRewrite);
+        $this->assertStringContainsString('rewrite ^/geoflow-target-site/(.+)$ /geoflow-target-site/index.php/$1 last;', $btRewrite);
 
         $frontController = (string) $zip->getFromName('public/index.php');
         $this->assertStringContainsString('function normalizeRequestPath', $frontController);
         $this->assertStringContainsString('function sitePath', $frontController);
         $this->assertStringContainsString('verifySignedRequest($config, $method, $path, $body)', $frontController);
-        $this->assertStringContainsString("frontSitePath(\$config, '/article/'.rawurlencode(\$slug))", $frontController);
+        $this->assertStringContainsString('frontSitePath($config, articlePermalinkPath($config, $article))', $frontController);
 
         $zip->close();
         unlink($zipPath);
@@ -3282,6 +3677,43 @@ class AdminDistributionPageTest extends TestCase
         ]);
     }
 
+    public function test_custom_permalink_settings_are_not_sent_to_pre_1_3_agent_packages(): void
+    {
+        Http::fake();
+        $policy = ArticlePermalinkPolicy::defaults()->activate('/{slug}.html');
+        $channel = DistributionChannel::query()->create([
+            'name' => 'Legacy Agent',
+            'domain' => 'legacy-agent.example.com',
+            'endpoint_url' => 'https://legacy-agent.example.com',
+            'channel_type' => DistributionChannel::TYPE_GEOFLOW_AGENT,
+            'site_settings' => [ArticlePermalinkPolicy::SETTING_KEY => $policy->toArray()],
+            'channel_config' => [
+                DistributionChannel::FRONTEND_CAPABILITIES_CACHE_KEY => [
+                    'status' => 'ok',
+                    'reachable' => true,
+                    'capability_version' => '1.2',
+                ],
+            ],
+            'status' => DistributionChannel::STATUS_ACTIVE,
+        ]);
+        DistributionChannelSecret::query()->create([
+            'distribution_channel_id' => (int) $channel->id,
+            'key_id' => 'gfk_legacy_permalink',
+            'secret_ciphertext' => app(ApiKeyCrypto::class)->encrypt('gfsec_legacy_permalink_secret'),
+            'status' => 'active',
+            'scopes' => ['site.settings.update'],
+        ]);
+
+        try {
+            app(DistributionHttpClient::class)->syncSiteSettings($channel->fresh());
+            $this->fail('Expected legacy Agent package to reject custom permalink sync.');
+        } catch (\RuntimeException $exception) {
+            $this->assertStringContainsString('capability 1.3', $exception->getMessage());
+        }
+
+        Http::assertNothingSent();
+    }
+
     public function test_sync_channel_settings_requeues_existing_articles_for_target_refresh(): void
     {
         Queue::fake();
@@ -3357,8 +3789,16 @@ class AdminDistributionPageTest extends TestCase
             'id' => (int) $distribution->id,
             'action' => 'update',
             'status' => 'queued',
-            'idempotency_key' => 'article-'.$article->id.'-channel-'.$channel->id.'-update-v1',
         ]);
+        $distribution->refresh();
+        $this->assertStringStartsWith(
+            'article-'.$article->id.'-channel-'.$channel->id.'-update-v1-',
+            (string) $distribution->idempotency_key,
+        );
+        $this->assertStringEndsWith(
+            substr((string) $distribution->payload_hash, 0, 16),
+            (string) $distribution->idempotency_key,
+        );
         $this->assertDatabaseHas('article_distributions', [
             'id' => (int) $deletedDistribution->id,
             'action' => 'delete',
@@ -3398,7 +3838,9 @@ class AdminDistributionPageTest extends TestCase
 
     public function test_task_creation_persists_selected_distribution_channels(): void
     {
+        $admin = $this->admin();
         $fixtures = $this->taskFixtures();
+        $fixtures['ai_model']->forceFill(['owner_admin_id' => $admin->id])->save();
         $channelOne = DistributionChannel::query()->create([
             'name' => '官网主站',
             'domain' => 'example.com',
@@ -3414,7 +3856,7 @@ class AdminDistributionPageTest extends TestCase
             'status' => 'active',
         ]);
 
-        $this->actingAs($this->admin(), 'admin')
+        $this->actingAs($admin, 'admin')
             ->post(route('admin.tasks.store'), [
                 'task_name' => '分发任务',
                 'title_library_id' => $fixtures['title_library']->id,
@@ -3953,6 +4395,7 @@ class AdminDistributionPageTest extends TestCase
             'distribution_channel_id' => (int) $channel->id,
             'action' => 'publish',
             'status' => 'queued',
+            'remote_meta' => ['workflow_fence' => app(ArticlePublicationEligibilityService::class)->fence($article)],
             'idempotency_key' => 'article-'.$article->id.'-channel-'.$channel->id.'-publish-v1',
         ]);
 
@@ -4032,6 +4475,7 @@ MD,
             'distribution_channel_id' => (int) $channel->id,
             'action' => 'publish',
             'status' => 'queued',
+            'remote_meta' => ['workflow_fence' => app(ArticlePublicationEligibilityService::class)->fence($article)],
             'idempotency_key' => 'article-'.$article->id.'-channel-'.$channel->id.'-publish-v1',
         ]);
 
@@ -4044,7 +4488,7 @@ MD,
             'remote_url' => 'https://example.com/article/remote-123',
         ]);
         Http::assertSent(fn ($request): bool => $request->hasHeader('X-GEOFlow-Key-Id', 'gfk_test')
-            && $request->hasHeader('X-GEOFlow-Idempotency-Key', 'article-'.$article->id.'-channel-'.$channel->id.'-publish-v1')
+            && $request->hasHeader('X-GEOFlow-Idempotency-Key', (string) $distribution->fresh()->idempotency_key)
             && $request->url() === 'https://example.com/geoflow-agent/v1/articles'
             && str_contains((string) $request['article']['content_html'], '<h2>核心摘要</h2>')
             && str_contains((string) $request['article']['content_html'], '<strong>提及率</strong>')
@@ -4101,6 +4545,7 @@ MD,
             'distribution_channel_id' => (int) $channel->id,
             'action' => 'publish',
             'status' => 'queued',
+            'remote_meta' => ['workflow_fence' => app(ArticlePublicationEligibilityService::class)->fence($article)],
             'idempotency_key' => 'article-'.$article->id.'-channel-'.$channel->id.'-publish-v1',
         ]);
 
@@ -4181,6 +4626,8 @@ MD,
             'original_name' => 'hero-demo.png',
             'file_name' => 'hero-demo.png',
             'file_path' => 'storage/uploads/images/2026/05/hero-demo.png',
+            'managed_path_hash' => app(ManagedImageFileService::class)
+                ->pathHash('storage/uploads/images/2026/05/hero-demo.png'),
             'file_size' => 67,
             'mime_type' => 'image/png',
             'width' => 1,
@@ -4310,8 +4757,16 @@ MD,
 
         $this->assertDatabaseHas('article_distributions', [
             'id' => (int) $distribution->id,
+            'action' => 'publish',
+            'status' => 'synced',
+            'remote_url' => 'https://example.com/article/remote-edit-article/',
+        ]);
+        $this->assertDatabaseHas('article_distributions', [
+            'article_id' => (int) $article->id,
+            'distribution_channel_id' => (int) $channel->id,
             'action' => 'update',
             'status' => 'synced',
+            'remote_id' => 'geoflow-remote-edit-article',
             'remote_url' => 'https://example.com/article/remote-edit-article/',
         ]);
         Http::assertSent(fn ($request): bool => $request->url() === 'https://example.com/geoflow-agent/v1/articles/remote-edit-article/update'
@@ -4371,8 +4826,16 @@ MD,
 
         $this->assertDatabaseHas('article_distributions', [
             'id' => (int) $distribution->id,
+            'action' => 'publish',
+            'status' => 'synced',
+            'remote_id' => 'geoflow-remote-delete-article',
+        ]);
+        $this->assertDatabaseHas('article_distributions', [
+            'article_id' => (int) $article->id,
+            'distribution_channel_id' => (int) $channel->id,
             'action' => 'delete',
             'status' => 'synced',
+            'remote_id' => 'geoflow-remote-delete-article',
             'remote_url' => null,
         ]);
         $this->assertDatabaseHas('articles', [
@@ -4429,18 +4892,26 @@ MD,
             'idempotency_key' => 'article-'.$article->id.'-channel-'.$channel->id.'-publish-v1',
         ]);
 
-        $this->actingAs($this->admin(), 'admin')
+        $response = $this->actingAs($this->admin(), 'admin')
             ->withHeaders([
                 'Accept' => 'application/json',
                 'X-Requested-With' => 'XMLHttpRequest',
             ])
-            ->post(route('admin.distribution.article.delete', ['distributionId' => (int) $distribution->id]))
+            ->post(route('admin.distribution.article.delete', ['distributionId' => (int) $distribution->id]));
+
+        $deleteDistribution = ArticleDistribution::query()
+            ->where('article_id', (int) $article->id)
+            ->where('distribution_channel_id', (int) $channel->id)
+            ->where('action', 'delete')
+            ->sole();
+
+        $response
             ->assertOk()
             ->assertJson([
                 'ok' => true,
                 'message' => __('admin.distribution.message.remote_article_deleted'),
                 'job' => [
-                    'id' => (int) $distribution->id,
+                    'id' => (int) $deleteDistribution->id,
                     'action' => 'delete',
                     'status' => 'synced',
                     'remote_url' => null,
@@ -4612,6 +5083,49 @@ MD,
         Queue::assertPushed(ProcessArticleDistributionJob::class);
     }
 
+    public function test_admin_cannot_retry_distribution_after_its_task_is_deleted(): void
+    {
+        Queue::fake();
+        $fixtures = $this->taskFixtures();
+        $channel = DistributionChannel::query()->create([
+            'name' => 'Deleted task retry channel',
+            'domain' => 'deleted-task-retry.example.com',
+            'endpoint_url' => 'https://deleted-task-retry.example.com',
+            'status' => 'active',
+        ]);
+        $task = Task::query()->create([
+            'name' => 'Deleted distribution task',
+            'status' => 'paused',
+            'publish_scope' => 'local_and_distribution',
+        ]);
+        $task->distributionChannels()->attach($channel->id);
+        $article = Article::query()->create([
+            'title' => 'Deleted task distribution',
+            'slug' => 'deleted-task-distribution',
+            'content' => 'Body',
+            'category_id' => $fixtures['category']->id,
+            'author_id' => $fixtures['author']->id,
+            'task_id' => $task->id,
+            'status' => 'published',
+            'review_status' => 'approved',
+        ]);
+        $distribution = ArticleDistribution::query()->create([
+            'article_id' => $article->id,
+            'distribution_channel_id' => $channel->id,
+            'action' => 'publish',
+            'status' => 'failed',
+            'idempotency_key' => 'deleted-task-distribution-retry',
+        ]);
+        app(TaskLifecycleService::class)->deleteTask((int) $task->id);
+
+        $this->actingAs($this->admin(), 'admin')
+            ->post(route('admin.distribution.retry', ['distributionId' => (int) $distribution->id]))
+            ->assertSessionHasErrors();
+
+        $this->assertSame('failed', $distribution->fresh()->status);
+        Queue::assertNothingPushed();
+    }
+
     public function test_distribution_jobs_page_can_filter_by_status_and_channel(): void
     {
         $fixtures = $this->taskFixtures();
@@ -4720,6 +5234,7 @@ MD,
             'distribution_channel_id' => (int) $channel->id,
             'action' => 'publish',
             'status' => 'queued',
+            'remote_meta' => ['workflow_fence' => app(ArticlePublicationEligibilityService::class)->fence($article)],
             'idempotency_key' => 'article-'.$article->id.'-channel-'.$channel->id.'-publish-v1',
         ]);
 

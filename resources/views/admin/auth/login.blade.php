@@ -1,11 +1,19 @@
+@php($adminUiV3Enabled = (bool) config('geoflow.admin_ui_v3_enabled', false))
 <!DOCTYPE html>
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ __('admin.login.title') }} — {{ $adminSiteName }}</title>
-    <script src="{{ asset('js/tailwindcss.play-cdn.js') }}"></script>
+    <x-pwa-head />
+    <title>{{ __('admin.login.title') }} · {{ $adminSiteName }}</title>
+    @if ($adminUiV3Enabled)
+        @vite(['resources/css/app.css', 'resources/js/pwa.js'])
+    @else
+        <script src="{{ asset('js/tailwindcss.play-cdn.js') }}"></script>
+        @vite('resources/js/pwa.js')
+    @endif
     <script src="{{ asset('js/lucide.min.js') }}"></script>
+    @unless ($adminUiV3Enabled)
     <style>
         body {
             background: radial-gradient(circle at top left, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 32%),
@@ -26,10 +34,11 @@
             background: linear-gradient(180deg, rgba(239, 246, 255, 0.96) 0%, rgba(255, 255, 255, 0.9) 100%);
         }
     </style>
+    @endunless
 </head>
-<body class="overflow-hidden">
+<body class="overflow-hidden @if($adminUiV3Enabled) gf-login-v3 @endif">
 <div class="fixed right-4 top-4 z-50">
-    <select onchange="window.location.href=this.value" class="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 shadow-sm">
+    <select aria-label="{{ __('admin.auth.language_label') }}" onchange="window.location.href=this.value" class="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 shadow-sm">
         @foreach (\App\Support\AdminWeb::supportedLocales() as $localeCode => $localeLabel)
             <option value="{{ route('admin.locale.switch', ['locale' => $localeCode]) }}" @selected(app()->getLocale() === $localeCode)>
                 {{ $localeLabel }}
@@ -77,16 +86,9 @@
                                 <span class="text-gray-500">{{ __('admin.login.first_login_username') }}</span>
                                 <code class="rounded bg-gray-100 px-2 py-1 font-mono text-xs text-gray-900">{{ $initialAdminHint['username'] ?? '' }}</code>
                             </div>
-                            @if (($initialAdminHint['mode'] ?? '') === 'known')
-                                <div class="flex items-center justify-between gap-3">
-                                    <span class="text-gray-500">{{ __('admin.login.first_login_password') }}</span>
-                                    <code class="rounded bg-gray-100 px-2 py-1 font-mono text-xs text-gray-900">{{ $initialAdminHint['password'] ?? '' }}</code>
-                                </div>
-                            @else
-                                <div class="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
-                                    {{ __('admin.login.first_login_password_from_log') }}
-                                </div>
-                            @endif
+                            <div class="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                                {{ __('admin.login.first_login_password_from_log') }}
+                            </div>
                         </div>
                         <p class="mt-3 text-xs leading-5 text-red-600">{{ __('admin.login.first_login_security') }}</p>
                     </div>

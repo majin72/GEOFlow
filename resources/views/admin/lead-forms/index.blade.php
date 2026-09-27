@@ -8,9 +8,9 @@
                 <p class="mt-1 text-sm text-gray-600">{{ __('admin.lead_forms.page_subtitle') }}</p>
             </div>
             <div class="flex flex-wrap gap-2">
-                <a href="{{ route('admin.analytics') }}" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                <a href="{{ $backUrl }}" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2">
                     <i data-lucide="arrow-left" class="mr-2 h-4 w-4"></i>
-                    {{ __('admin.growth_center.back') }}
+                    {{ $backLabel }}
                 </a>
                 <a href="{{ route('admin.lead-forms.create') }}" class="inline-flex items-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
                     <i data-lucide="plus" class="mr-2 h-4 w-4"></i>
@@ -54,7 +54,7 @@
                 <h2 class="text-lg font-semibold text-gray-900">{{ __('admin.lead_forms.list_title') }}</h2>
             </div>
             <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200">
+                <table class="min-w-full divide-y divide-gray-200" data-sticky-actions>
                     <thead class="bg-gray-50">
                     <tr>
                         <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">{{ __('admin.lead_forms.column.name') }}</th>
@@ -85,15 +85,15 @@
                             <td class="px-6 py-4 text-right text-sm font-medium">
                                 <div class="flex flex-wrap justify-end gap-2">
                                     <a href="{{ route('admin.lead-forms.edit', ['formId' => $form->id]) }}" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">{{ __('admin.button.edit') }}</a>
-                                    <form method="POST" action="{{ route('admin.lead-forms.toggle-status', ['formId' => $form->id]) }}">
+                                    <form method="POST" action="{{ route('admin.lead-forms.toggle-status', ['formId' => $form->id]) }}" @if($form->isActive()) data-admin-confirm-form data-admin-confirm-tone="warning" data-admin-confirm-title="{{ __('admin.lead_forms.action.disable') }} {{ $form->name }}" data-admin-confirm-message="{{ __('admin.action_dialog.target', ['name' => $form->name]) }}" data-admin-confirm-guidance="{{ __('admin.action_dialog.generic_impact') }}" data-admin-confirm-label="{{ __('admin.lead_forms.action.disable') }}" @endif>
                                         @csrf
-                                        <button type="submit" class="inline-flex items-center rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100">
+                                        <button type="submit" class="inline-flex items-center rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100" @if($form->isActive()) data-admin-confirm-submit disabled aria-disabled="true" @endif>
                                             {{ $form->isActive() ? __('admin.lead_forms.action.disable') : __('admin.lead_forms.action.enable') }}
                                         </button>
                                     </form>
-                                    <form method="POST" action="{{ route('admin.lead-forms.delete', ['formId' => $form->id]) }}" onsubmit="return confirm('{{ __('admin.lead_forms.confirm_delete') }}')">
+                                    <form method="POST" action="{{ route('admin.lead-forms.delete', ['formId' => $form->id]) }}" data-admin-confirm-form data-admin-confirm-tone="danger" data-admin-confirm-title="{{ __('admin.lead_forms.confirm_delete') }}" data-admin-confirm-message="{{ __('admin.action_dialog.target', ['name' => $form->name]) }}" data-admin-confirm-guidance="{{ __('admin.action_dialog.generic_impact') }}" data-admin-confirm-label="{{ __('admin.button.delete') }}">
                                         @csrf
-                                        <button type="submit" class="inline-flex items-center rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50">{{ __('admin.button.delete') }}</button>
+                                        <button type="submit" class="inline-flex items-center rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50" data-admin-confirm-submit disabled aria-disabled="true">{{ __('admin.button.delete') }}</button>
                                     </form>
                                 </div>
                             </td>

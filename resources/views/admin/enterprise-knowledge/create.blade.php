@@ -12,7 +12,7 @@
 
     <div class="px-4 sm:px-0">
         <div class="mb-8 flex items-center gap-4">
-            <a href="{{ route('admin.enterprise-knowledge.index') }}" class="text-gray-400 hover:text-gray-600">
+            <a href="{{ route('admin.enterprise-knowledge.index') }}" aria-label="{{ __('admin.common.back') }}" class="text-gray-400 hover:text-gray-600">
                 <i data-lucide="arrow-left" class="h-5 w-5"></i>
             </a>
             <div>
@@ -200,7 +200,12 @@
                     input.files = event.dataTransfer.files;
                     renderFiles();
                 } catch (error) {
-                    alert(labels.dropFallback);
+                    window.AdminActionDialog?.notice?.({
+                        tone: 'info',
+                        title: @json(__('admin.action_dialog.info_title')),
+                        message: labels.dropFallback,
+                    });
+                    input?.focus?.({ preventScroll: true });
                 }
             });
 
@@ -212,9 +217,8 @@
                 submitButton.disabled = true;
                 submitButton.classList.add('opacity-70');
                 submitButton.innerHTML = `<i data-lucide="loader-2" class="mr-2 h-4 w-4 animate-spin"></i>${escapeHtml(labels.submitting)}`;
-                if (window.lucide) {
-                    window.lucide.createIcons();
-                }
+                if (window.GeoFlowAdminUi?.refreshIcons) window.GeoFlowAdminUi.refreshIcons(submitButton);
+                else window.lucide?.createIcons?.();
             });
         });
     </script>

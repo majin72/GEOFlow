@@ -3,37 +3,33 @@
 @section('content')
     @php($syncableChannels = $channels->filter(fn ($channel) => $channel->status === 'active' && $channel->channelType() === 'geoflow_agent')->values())
     @php($channelSyncSummaries = $channelSyncSummaries ?? [])
+    @php($canDeleteChannels = auth('admin')->user() instanceof \App\Models\Admin && auth('admin')->user()->isSuperAdmin())
 
     <div class="space-y-8 px-4 sm:px-0">
-        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-                <h1 class="text-2xl font-bold text-gray-900">{{ __('admin.distribution.page_heading') }}</h1>
-                <p class="mt-1 text-sm text-gray-600">{{ __('admin.distribution.page_subtitle') }}</p>
+        <header class="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div class="min-w-0 flex-1">
+                <div class="sr-only">
+                    <h1>{{ __('admin.distribution.page_heading') }}</h1>
+                    <p>{{ __('admin.distribution.page_subtitle') }}</p>
+                </div>
+                <x-admin.v3.distribution-subnav />
             </div>
-            <div class="flex flex-wrap items-center gap-3 lg:justify-end">
-                <button type="button" data-selected-sync-open class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
-                    <i data-lucide="list-checks" class="mr-2 h-4 w-4"></i>
+            <div class="flex shrink-0 flex-wrap items-center gap-2 lg:justify-end">
+                <button type="button" data-selected-sync-open class="inline-flex min-h-10 items-center gap-2 rounded-md border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 transition-[background-color,border-color,transform] duration-150 [@media(hover:hover)]:hover:border-gray-400 [@media(hover:hover)]:hover:bg-gray-50 active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600">
+                    <i data-lucide="list-checks" class="h-4 w-4"></i>
                     {{ __('admin.distribution.button.sync_settings_selected') }}
                 </button>
-                <a href="{{ route('admin.distribution.sync-settings-all.preview') }}" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
-                    <i data-lucide="scan-search" class="mr-2 h-4 w-4"></i>
-                    {{ __('admin.distribution.button.sync_settings_all') }}
-                </a>
-                <a href="{{ route('admin.distribution.jobs') }}" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
-                    <i data-lucide="list-checks" class="mr-2 h-4 w-4"></i>
-                    {{ __('admin.distribution.button.jobs') }}
-                </a>
-                <a href="{{ route('admin.distribution.create') }}" class="inline-flex items-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
-                    <i data-lucide="plus" class="mr-2 h-4 w-4"></i>
+                <a href="{{ route('admin.distribution.create') }}" class="inline-flex min-h-10 items-center gap-2 rounded-md border border-blue-600 bg-blue-600 px-4 text-sm font-medium text-white transition-[background-color,border-color,transform] duration-150 [@media(hover:hover)]:hover:border-blue-700 [@media(hover:hover)]:hover:bg-blue-700 active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600">
+                    <i data-lucide="plus" class="h-4 w-4"></i>
                     {{ __('admin.distribution.button.create') }}
                 </a>
             </div>
-        </div>
+        </header>
 
-        <div data-selected-sync-modal class="fixed inset-0 z-50 hidden overflow-y-auto px-4 py-6 sm:px-6 lg:px-8" aria-labelledby="selected-sync-title" role="dialog" aria-modal="true">
-            <div class="fixed inset-0 bg-gray-900/40" data-selected-sync-close></div>
-            <div class="relative mx-auto max-w-4xl rounded-xl bg-white shadow-xl">
-                <form method="POST" action="{{ route('admin.distribution.sync-settings-selected.preview') }}">
+        <div data-selected-sync-modal class="fixed inset-0 z-50 hidden items-center justify-center overflow-y-auto px-4 py-4 sm:px-6" aria-labelledby="selected-sync-title" role="dialog" aria-modal="true">
+            <div class="fixed inset-0 bg-[rgba(15,23,42,0.48)]" data-selected-sync-close></div>
+            <div class="relative mx-auto max-h-[calc(100dvh-2rem)] w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-[0_24px_72px_rgba(15,23,42,0.28)]">
+                <form method="POST" action="{{ route('admin.distribution.sync-settings-selected.preview') }}" class="flex max-h-[calc(100dvh-2rem)] flex-col">
                     @csrf
                     <div class="flex items-start justify-between gap-4 border-b border-gray-200 px-6 py-5">
                         <div>
@@ -45,7 +41,7 @@
                         </button>
                     </div>
 
-                    <div class="px-6 py-5">
+                    <div class="min-h-0 overflow-y-auto px-6 py-5">
                         <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <div data-selected-sync-count data-count-template="{{ __('admin.distribution.selected_sync.selected_count', ['count' => '__COUNT__']) }}" class="inline-flex w-fit rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">
                                 {{ __('admin.distribution.selected_sync.selected_count', ['count' => 0]) }}
@@ -117,28 +113,98 @@
             </div>
         @endif
 
-        <div class="grid grid-cols-1 gap-6 md:grid-cols-4">
-            <div class="rounded-lg bg-white p-5 shadow">
+        <div class="grid grid-cols-1 gap-6 md:grid-cols-4" data-distribution-stats>
+            <div class="flex flex-col items-center justify-center rounded-lg bg-white p-5 text-center shadow" data-distribution-stat>
                 <div class="text-sm font-medium text-gray-500">{{ __('admin.distribution.stats.total') }}</div>
-                <div class="mt-2 text-2xl font-semibold text-gray-900">{{ (int) ($stats['total'] ?? 0) }}</div>
+                <div class="mt-2 text-2xl font-semibold tabular-nums text-gray-900">{{ (int) ($stats['total'] ?? 0) }}</div>
             </div>
-            <div class="rounded-lg bg-white p-5 shadow">
+            <div class="flex flex-col items-center justify-center rounded-lg bg-white p-5 text-center shadow" data-distribution-stat>
                 <div class="text-sm font-medium text-gray-500">{{ __('admin.distribution.stats.active') }}</div>
-                <div class="mt-2 text-2xl font-semibold text-green-700">{{ (int) ($stats['active'] ?? 0) }}</div>
+                <div class="mt-2 text-2xl font-semibold tabular-nums text-green-700">{{ (int) ($stats['active'] ?? 0) }}</div>
             </div>
-            <div class="rounded-lg bg-white p-5 shadow">
+            <div class="flex flex-col items-center justify-center rounded-lg bg-white p-5 text-center shadow" data-distribution-stat>
                 <div class="text-sm font-medium text-gray-500">{{ __('admin.distribution.stats.pending') }}</div>
-                <div class="mt-2 text-2xl font-semibold text-blue-700">{{ (int) ($stats['pending'] ?? 0) }}</div>
+                <div class="mt-2 text-2xl font-semibold tabular-nums text-blue-700">{{ (int) ($stats['pending'] ?? 0) }}</div>
             </div>
-            <div class="rounded-lg bg-white p-5 shadow">
+            <div class="flex flex-col items-center justify-center rounded-lg bg-white p-5 text-center shadow" data-distribution-stat>
                 <div class="text-sm font-medium text-gray-500">{{ __('admin.distribution.stats.failed') }}</div>
-                <div class="mt-2 text-2xl font-semibold text-red-700">{{ (int) ($stats['failed'] ?? 0) }}</div>
+                <div class="mt-2 text-2xl font-semibold tabular-nums text-red-700">{{ (int) ($stats['failed'] ?? 0) }}</div>
             </div>
         </div>
 
-        <div class="rounded-lg bg-white shadow">
+        <section data-default-site-management class="overflow-hidden rounded-lg bg-white shadow">
+            <div class="flex flex-col gap-5 border-b border-gray-200 px-6 py-5 lg:flex-row lg:items-center lg:justify-between">
+                <div class="flex min-w-0 items-start gap-4">
+                    <span class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 ring-1 ring-blue-100">
+                        <i data-lucide="house" class="h-5 w-5"></i>
+                    </span>
+                    <div class="min-w-0">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <h2 class="text-lg font-semibold text-gray-900">{{ __('admin.distribution.default_site.title') }}</h2>
+                            <span class="inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+                                {{ __('admin.distribution.default_site.badge') }}
+                            </span>
+                            <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                                <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                                {{ __('admin.distribution.default_site.status_active') }}
+                            </span>
+                        </div>
+                        <p class="mt-1 text-sm text-gray-600">{{ __('admin.distribution.default_site.desc') }}</p>
+                        <div class="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                            <span class="max-w-full break-words font-medium text-gray-900">{{ $defaultSite['name'] }}</span>
+                            <span class="inline-flex min-w-0 max-w-full items-center gap-2">
+                                <span class="text-gray-300" aria-hidden="true">·</span>
+                                <a href="{{ $defaultSite['url'] }}" target="_blank" rel="noopener noreferrer" class="min-w-0 break-all text-blue-600 hover:text-blue-700">
+                                    {{ $defaultSite['url'] }}
+                                </a>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-2 lg:justify-end">
+                    <a href="{{ $defaultSite['url'] }}" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-10 items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2">
+                        <i data-lucide="external-link" class="mr-2 h-4 w-4"></i>
+                        {{ __('admin.distribution.default_site.open_site') }}
+                    </a>
+                    <a href="{{ route('admin.lead-forms.index') }}" class="inline-flex min-h-10 items-center rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2">
+                        <i data-lucide="clipboard-list" class="mr-2 h-4 w-4"></i>
+                        {{ __('admin.distribution.default_site.manage_forms') }}
+                    </a>
+                    <a href="{{ route('admin.site-settings.index') }}" class="inline-flex min-h-10 items-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2">
+                        <i data-lucide="settings-2" class="mr-2 h-4 w-4"></i>
+                        {{ __('admin.distribution.default_site.site_settings') }}
+                    </a>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 divide-y divide-gray-200 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+                <div class="flex items-center justify-between gap-4 px-6 py-4">
+                    <div>
+                        <div class="text-sm text-gray-500">{{ __('admin.distribution.default_site.published_articles') }}</div>
+                        <div class="mt-1 text-2xl font-semibold tabular-nums text-gray-900">{{ (int) $defaultSite['published_articles'] }}</div>
+                    </div>
+                    <i data-lucide="file-check-2" class="h-6 w-6 text-gray-400"></i>
+                </div>
+                <div class="flex items-center justify-between gap-4 px-6 py-4">
+                    <div>
+                        <div class="text-sm text-gray-500">{{ __('admin.distribution.default_site.forms') }}</div>
+                        <div class="mt-1 text-2xl font-semibold tabular-nums text-gray-900">
+                            {{ __('admin.distribution.default_site.forms_summary', [
+                                'active' => (int) $defaultSite['forms_active'],
+                                'total' => (int) $defaultSite['forms_total'],
+                            ]) }}
+                        </div>
+                    </div>
+                    <i data-lucide="list-checks" class="h-6 w-6 text-gray-400"></i>
+                </div>
+            </div>
+        </section>
+
+        <div data-external-distribution-channels class="rounded-lg bg-white shadow">
             <div class="border-b border-gray-200 px-6 py-4">
                 <h2 class="text-lg font-medium text-gray-900">{{ __('admin.distribution.channels_title') }}</h2>
+                <p class="mt-1 text-sm text-gray-500">{{ __('admin.distribution.channels_desc') }}</p>
             </div>
             @if ($channels->isEmpty())
                 <div class="px-6 py-10 text-center text-sm text-gray-500">
@@ -148,7 +214,7 @@
                 </div>
             @else
                 <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y divide-gray-200">
+                    <table class="min-w-full divide-y divide-gray-200" data-sticky-actions>
                         <thead class="bg-gray-50">
                             <tr>
                                 <th class="px-6 py-3 text-left text-xs font-medium uppercase text-gray-500">{{ __('admin.distribution.field.name') }}</th>
@@ -171,15 +237,26 @@
                                     </td>
                                     <td class="px-6 py-4 text-sm text-gray-600">{{ $channel->domain }}</td>
                                     <td class="px-6 py-4 text-sm">
-                                        <span class="inline-flex rounded-full px-2 py-1 text-xs font-medium {{ $channel->status === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-700' }}">{{ $channelStatusLabel }}</span>
+                                        <span class="inline-flex rounded-full px-2 py-1 text-xs font-medium {{ $channel->status === 'active' ? 'bg-green-100 text-green-800' : ($channel->status === 'deleting' ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-700') }}">{{ $channelStatusLabel }}</span>
                                     </td>
                                     <td class="px-6 py-4 text-sm text-gray-600">
                                         {{ __('admin.distribution.queue_summary', ['pending' => (int) $channel->pending_count, 'failed' => (int) $channel->failed_count]) }}
                                     </td>
                                     <td class="px-6 py-4 text-sm">
                                         <div class="flex items-center gap-3">
-                                            <a href="{{ route('admin.distribution.show', ['channelId' => (int) $channel->id]) }}" class="text-blue-600 hover:text-blue-800">{{ __('admin.button.view') }}</a>
-                                            <a href="{{ route('admin.distribution.edit', ['channelId' => (int) $channel->id]) }}" class="text-gray-600 hover:text-gray-800">{{ __('admin.button.edit') }}</a>
+                                            <a href="{{ $channel->isHostedSite() ? route('admin.distribution.hosted-sites.show', $channel) : route('admin.distribution.show', ['channelId' => (int) $channel->id]) }}" class="text-blue-600 hover:text-blue-800">{{ __('admin.button.view') }}</a>
+                                            @if ($channel->status === 'deleting')
+                                                @if ($canDeleteChannels)
+                                                    <a href="{{ route('admin.distribution.delete', ['channelId' => (int) $channel->id]) }}" class="font-medium text-amber-700 hover:text-amber-900">{{ __('admin.distribution.delete.button.continue') }}</a>
+                                                @endif
+                                            @else
+                                                @unless ($channel->isHostedSite())
+                                                    <a href="{{ route('admin.distribution.edit', ['channelId' => (int) $channel->id]) }}" class="text-gray-600 hover:text-gray-800">{{ __('admin.button.edit') }}</a>
+                                                @endunless
+                                                @if ($canDeleteChannels)
+                                                    <a href="{{ route('admin.distribution.delete', ['channelId' => (int) $channel->id]) }}" class="text-red-600 hover:text-red-800">{{ __('admin.distribution.delete.button.open') }}</a>
+                                                @endif
+                                            @endif
                                         </div>
                                     </td>
                                 </tr>
@@ -288,6 +365,7 @@
             const countBadge = document.querySelector('[data-selected-sync-count]');
             const selectAllButton = document.querySelector('[data-selected-sync-select-all]');
             const clearButton = document.querySelector('[data-selected-sync-clear]');
+            let modalOpener = null;
 
             if (!modal || !openButton) {
                 return;
@@ -306,17 +384,27 @@
                 }
             };
 
+            const closeModal = () => {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+                document.body.classList.remove('overflow-hidden');
+                modalOpener?.focus?.({ preventScroll: true });
+                modalOpener = null;
+            };
+
             openButton.addEventListener('click', () => {
+                modalOpener = openButton;
                 modal.classList.remove('hidden');
+                modal.classList.add('flex');
                 document.body.classList.add('overflow-hidden');
                 refreshSelectedCount();
+                window.requestAnimationFrame(() => {
+                    modal.querySelector('[data-selected-sync-checkbox]:checked, [data-selected-sync-checkbox], [data-selected-sync-close]')?.focus?.({ preventScroll: true });
+                });
             });
 
             closeButtons.forEach((button) => {
-                button.addEventListener('click', () => {
-                    modal.classList.add('hidden');
-                    document.body.classList.remove('overflow-hidden');
-                });
+                button.addEventListener('click', closeModal);
             });
 
             checkboxes.forEach((checkbox) => checkbox.addEventListener('change', refreshSelectedCount));
@@ -341,8 +429,20 @@
 
             document.addEventListener('keydown', (event) => {
                 if (event.key === 'Escape' && !modal.classList.contains('hidden')) {
-                    modal.classList.add('hidden');
-                    document.body.classList.remove('overflow-hidden');
+                    closeModal();
+                    return;
+                }
+                if (event.key !== 'Tab' || modal.classList.contains('hidden')) return;
+                const focusable = Array.from(modal.querySelectorAll('button:not([disabled]), input:not([disabled]), a[href]'));
+                if (focusable.length === 0) return;
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                if (event.shiftKey && document.activeElement === first) {
+                    event.preventDefault();
+                    last.focus();
+                } else if (!event.shiftKey && document.activeElement === last) {
+                    event.preventDefault();
+                    first.focus();
                 }
             });
 

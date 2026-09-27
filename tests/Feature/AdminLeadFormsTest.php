@@ -25,6 +25,27 @@ class AdminLeadFormsTest extends TestCase
             ->assertSee('right-3', false);
     }
 
+    public function test_form_management_uses_permission_appropriate_parent_module(): void
+    {
+        $regularResponse = $this->actingAs($this->admin(), 'admin')
+            ->get(route('admin.lead-forms.index'));
+
+        $regularResponse
+            ->assertOk()
+            ->assertSee(route('admin.analytics'), false)
+            ->assertSee(__('admin.growth_center.back'));
+
+        auth('admin')->logout();
+
+        $superResponse = $this->actingAs($this->admin('super_admin'), 'admin')
+            ->get(route('admin.lead-forms.index'));
+
+        $superResponse
+            ->assertOk()
+            ->assertSee(route('admin.distribution.index'), false)
+            ->assertSee(__('admin.distribution.default_site.back'));
+    }
+
     public function test_create_form_field_rows_use_single_line_options_and_centered_required_control(): void
     {
         $this->actingAs($this->admin(), 'admin')
@@ -151,7 +172,7 @@ class AdminLeadFormsTest extends TestCase
         $form = $this->leadForm();
         $otherForm = $this->leadForm('partner', '合作咨询');
 
-        $alice = LeadSubmission::query()->create([
+        $alice = LeadSubmission::query()->forceCreate([
             'lead_form_id' => $form->id,
             'status' => LeadSubmission::STATUS_NEW,
             'payload' => ['name' => 'Alice', 'email' => 'alice@example.com'],
@@ -159,7 +180,7 @@ class AdminLeadFormsTest extends TestCase
             'ip_address' => '127.0.0.1',
             'created_at' => '2026-07-05 10:00:00',
         ]);
-        LeadSubmission::query()->create([
+        LeadSubmission::query()->forceCreate([
             'lead_form_id' => $otherForm->id,
             'status' => LeadSubmission::STATUS_INVALID,
             'payload' => ['name' => 'Bob'],
@@ -217,14 +238,14 @@ class AdminLeadFormsTest extends TestCase
         $this->assertStringNotContainsString('Bob', $csv);
     }
 
-    private function admin(): Admin
+    private function admin(string $role = 'admin'): Admin
     {
         return Admin::query()->create([
             'username' => 'lead_admin_'.uniqid(),
             'password' => 'secret-123',
             'email' => uniqid('lead-admin-').'@example.com',
             'display_name' => 'Lead Admin',
-            'role' => 'admin',
+            'role' => $role,
             'status' => 'active',
         ]);
     }

@@ -3,8 +3,9 @@
 namespace App\Console\Commands;
 
 use App\Models\SystemState;
+use App\Services\AiWorkspace\SystemKnowledgeBaseManager;
+use App\Services\AiWorkspace\SystemKnowledgeMediaManager;
 use Database\Seeders\AdminUserSeeder;
-use Database\Seeders\FrontendDemoSeeder;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -49,6 +50,13 @@ class GeoFlowInstallCommand extends Command
         'active_theme',
     ];
 
+    public function __construct(
+        private readonly SystemKnowledgeBaseManager $systemKnowledgeBases,
+        private readonly SystemKnowledgeMediaManager $systemKnowledgeMedia,
+    ) {
+        parent::__construct();
+    }
+
     public function handle(): int
     {
         if (! Schema::hasTable('system_states')) {
@@ -87,16 +95,10 @@ class GeoFlowInstallCommand extends Command
                 '--force' => true,
             ]);
 
-            if ((bool) config('geoflow.seed_frontend_demo', false)) {
-                $this->call('db:seed', [
-                    '--class' => FrontendDemoSeeder::class,
-                    '--force' => true,
-                ]);
-            }
+            $this->systemKnowledgeBases->sync();
+            $this->systemKnowledgeMedia->syncBundled();
 
-            $this->markInstalled($force ? 'forced_install' : 'fresh_install', [
-                'seed_frontend_demo' => (bool) config('geoflow.seed_frontend_demo', false),
-            ]);
+            $this->markInstalled($force ? 'forced_install' : 'fresh_install');
         } catch (Throwable $e) {
             $this->error('GEOFlow first-install seeders failed: '.$e->getMessage());
 
@@ -104,6 +106,7 @@ class GeoFlowInstallCommand extends Command
         }
 
         $this->components->info('GEOFlow installation marker has been written.');
+        $this->components->info('AI Workspace system knowledge and media have been synchronized.');
 
         return self::SUCCESS;
     }

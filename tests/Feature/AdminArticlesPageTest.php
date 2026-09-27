@@ -11,11 +11,16 @@ use App\Models\Category;
 use App\Models\DistributionChannel;
 use App\Models\Image;
 use App\Models\ImageLibrary;
+use App\Models\SensitiveWord;
 use App\Models\SiteSetting;
 use App\Models\Task;
+use App\Services\GeoFlow\ArticleRiskScanner;
 use App\Support\AdminWeb;
+use App\Support\Site\ArticlePermalinkPolicy;
+use App\Support\Site\SiteSettingsBag;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -34,6 +39,8 @@ class AdminArticlesPageTest extends TestCase
 
     public function test_authenticated_admin_can_view_articles_page(): void
     {
+        config()->set('geoflow.admin_ui_v3_enabled', true);
+
         $admin = Admin::query()->create([
             'username' => 'articles_admin',
             'password' => 'secret-123',
@@ -47,12 +54,139 @@ class AdminArticlesPageTest extends TestCase
             ->get(route('admin.articles.index', ['status' => 'draft']))
             ->assertOk()
             ->assertSee(__('admin.articles.page_title'))
+            ->assertSee('data-gf-topbar-identity', false)
+            ->assertSee('data-page-icon="file-text"', false)
+            ->assertSee(__('admin.articles.topbar_title'))
+            ->assertDontSee(__('admin.articles.page_subtitle'))
+            ->assertDontSee('<h1 class="text-3xl', false)
             ->assertViewHas('articles')
             ->assertViewHas('filters');
     }
 
-    public function test_articles_page_shows_content_engineering_workbench_with_pipeline_counts(): void
+    public function test_content_pages_share_the_article_navigation_and_keep_page_actions(): void
     {
+        config()->set('geoflow.admin_ui_v3_enabled', true);
+
+        $admin = Admin::query()->create([
+            'username' => 'article_section_navigation_admin',
+            'password' => 'secret-123',
+            'email' => 'article-section-navigation@example.com',
+            'display_name' => 'Article Navigation Admin',
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+
+        foreach ([
+            route('admin.articles.index') => 'article-list',
+            route('admin.categories.index') => 'categories',
+            route('admin.articles.index', ['review_status' => 'pending']) => 'review',
+            route('admin.articles.index', ['trashed' => 1]) => 'trash',
+        ] as $url => $activeKey) {
+            $response = $this->actingAs($admin, 'admin')->get($url);
+
+            $response
+                ->assertOk()
+                ->assertSee('data-articles-navigation', false)
+                ->assertSee(AdminWeb::routePath('admin.articles.index'), false)
+                ->assertSee(AdminWeb::routePath('admin.categories.index'), false)
+                ->assertSee(AdminWeb::routePath('admin.articles.index', ['review_status' => 'pending']).'#article-list', false)
+                ->assertSee(AdminWeb::routePath('admin.articles.index', ['trashed' => 1]), false);
+
+            $document = new \DOMDocument;
+            $document->loadHTML((string) $response->getContent(), LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            $xpath = new \DOMXPath($document);
+            $navigation = $xpath->query('//*[@data-articles-navigation]')?->item(0);
+            $items = $xpath->query('.//*[@data-articles-navigation-item]', $navigation);
+            $activeItems = $xpath->query('.//*[@aria-current="page"]', $navigation);
+
+            self::assertNotNull($navigation, $url);
+            self::assertSame(4, $items?->length, $url);
+            self::assertSame(
+                ['article-list', 'categories', 'review', 'trash'],
+                array_map(
+                    static fn (\DOMNode $item): string => (string) $item->attributes?->getNamedItem('data-articles-navigation-item')?->nodeValue,
+                    iterator_to_array($items),
+                ),
+                $url,
+            );
+            self::assertSame(4, $xpath->query('.//*[@data-articles-navigation-dot]', $navigation)?->length, $url);
+            self::assertSame(1, $activeItems?->length, $url);
+            self::assertSame(
+                $activeKey,
+                $activeItems?->item(0)?->attributes?->getNamedItem('data-articles-navigation-item')?->nodeValue,
+                $url,
+            );
+
+            if ($activeKey === 'article-list') {
+                $response
+                    ->assertSee('href="'.route('admin.articles.create').'"', false)
+                    ->assertSee('href="'.route('admin.manual-publications.index').'"', false);
+            }
+
+            if ($activeKey === 'categories') {
+                $response
+                    ->assertSee('href="'.route('admin.categories.create').'"', false)
+                    ->assertSee('href="'.route('admin.articles.index').'"', false);
+            }
+        }
+
+        foreach (['zh_CN', 'en', 'ja', 'es', 'ru', 'pt_BR'] as $locale) {
+            App::setLocale($locale);
+
+            foreach (['admin.articles.list_title', 'admin.button.category_manage', 'admin.button.review_center', 'admin.button.trash'] as $key) {
+                self::assertNotSame($key, __($key), $locale.': '.$key);
+            }
+        }
+    }
+
+    public function test_article_list_can_filter_articles_that_do_not_require_ai_quality_inspection(): void
+    {
+        $admin = Admin::query()->create([
+            'username' => 'articles_ai_quality_disabled_admin',
+            'password' => 'secret-123',
+            'email' => 'articles-ai-quality-disabled@example.com',
+            'display_name' => 'Articles AI Quality Filter Admin',
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+        $category = Category::query()->create([
+            'name' => 'AI 质检筛选分类',
+            'slug' => 'ai-quality-filter-category',
+        ]);
+        $author = Author::query()->create(['name' => 'AI 质检筛选作者']);
+        Article::query()->create([
+            'title' => '未启用 AI 质检文章',
+            'slug' => 'ai-quality-disabled-article',
+            'content' => '未启用质检的正文。',
+            'category_id' => $category->id,
+            'author_id' => $author->id,
+            'status' => 'draft',
+            'review_status' => 'pending',
+            'ai_quality_required_at_creation' => false,
+        ]);
+        Article::query()->create([
+            'title' => '必须 AI 质检文章',
+            'slug' => 'ai-quality-required-article',
+            'content' => '必须质检的正文。',
+            'category_id' => $category->id,
+            'author_id' => $author->id,
+            'status' => 'draft',
+            'review_status' => 'pending',
+            'ai_quality_required_at_creation' => true,
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.articles.index', ['ai_quality_status' => 'disabled']))
+            ->assertOk()
+            ->assertSee('value="disabled" selected', false)
+            ->assertSee('未启用 AI 质检文章')
+            ->assertDontSee('必须 AI 质检文章');
+    }
+
+    public function test_articles_page_hides_current_priority_module_and_keeps_summary_stats(): void
+    {
+        config()->set('geoflow.admin_ui_v3_enabled', true);
+
         $admin = Admin::query()->create([
             'username' => 'articles_workbench_admin',
             'password' => 'secret-123',
@@ -106,22 +240,16 @@ class AdminArticlesPageTest extends TestCase
         $this->actingAs($admin, 'admin')
             ->get(route('admin.articles.index'))
             ->assertOk()
-            ->assertSee(__('admin.articles.workbench.title'))
-            ->assertSee(__('admin.articles.workbench.review_title'))
-            ->assertSee(__('admin.articles.workbench.optimize_title'))
-            ->assertSee(__('admin.articles.workbench.distribution_title'))
-            ->assertSee(__('admin.articles.workbench.observation_title'))
-            ->assertSee(__('admin.articles.workbench.current_action_title'))
-            ->assertSee(__('admin.articles.workbench.current_action_desc', [
-                'count' => 2,
-                'stage' => __('admin.articles.workbench.distribution_title'),
-            ]))
-            ->assertSee(__('admin.articles.workbench.current_action_button'))
+            ->assertDontSee(__('admin.articles.page_subtitle'))
+            ->assertDontSee('content-workbench-heading', false)
+            ->assertDontSee(__('admin.articles.workbench.current_action_title'))
+            ->assertDontSee(__('admin.articles.workbench.current_action_button'))
+            ->assertSee(__('admin.articles.stats.total'))
+            ->assertSee(__('admin.articles.stats.published'))
+            ->assertSee(__('admin.articles.stats.draft'))
+            ->assertSee(__('admin.articles.stats.pending_review'))
             ->assertSee('id="article-list"', false)
             ->assertSee(route('admin.articles.index', ['review_status' => 'pending']).'#article-list', false)
-            ->assertSee(route('admin.articles.index', ['status' => 'draft']).'#article-list', false)
-            ->assertSee(route('admin.articles.index', ['status' => 'published']).'#article-list', false)
-            ->assertSee(route('admin.analytics'), false)
             ->assertViewHas('stats', fn (array $stats): bool => $stats['pending_review'] === 1
                 && $stats['draft'] === 1
                 && $stats['published'] === 2
@@ -224,6 +352,88 @@ class AdminArticlesPageTest extends TestCase
             ->assertSee(__('admin.article_editor.quick_actions.heading'), false);
     }
 
+    public function test_article_edit_scorecard_shows_persisted_risk_findings_and_recheck_action(): void
+    {
+        $admin = Admin::query()->create([
+            'username' => 'article_risk_ui_admin',
+            'password' => 'secret-123',
+            'email' => 'article-risk-ui@example.com',
+            'display_name' => 'Article Risk UI Admin',
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+        $category = Category::query()->create([
+            'name' => '风险界面分类',
+            'slug' => 'risk-ui-category',
+        ]);
+        $author = Author::query()->create(['name' => 'Risk UI Author']);
+        $article = Article::query()->create([
+            'title' => '宣称绝对第一的文章',
+            'slug' => 'risk-ui-article',
+            'excerpt' => '摘要',
+            'content' => '正文包含绝对第一的表述。',
+            'category_id' => $category->id,
+            'author_id' => $author->id,
+            'status' => 'draft',
+            'review_status' => 'pending',
+        ]);
+        SensitiveWord::query()->create([
+            'word' => '绝对第一',
+            'severity' => 'blocked',
+            'category' => 'absolute_claim',
+            'suggestion' => '改为有数据依据的限定表述',
+            'applies_to' => ['title', 'content'],
+        ]);
+        app(ArticleRiskScanner::class)->record($article, 'admin_save', (int) $admin->id);
+
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.articles.edit', ['articleId' => $article->id]))
+            ->assertOk()
+            ->assertSee(__('admin.articles.quality_scorecard.risk_status_blocked'))
+            ->assertSee('绝对第一')
+            ->assertSee('改为有数据依据的限定表述')
+            ->assertSee(route('admin.articles.risk-scan', ['articleId' => $article->id]), false)
+            ->assertSee('name="risk_override_reason"', false);
+    }
+
+    public function test_admin_can_manually_recheck_article_risk_from_the_edit_page(): void
+    {
+        $admin = Admin::query()->create([
+            'username' => 'article_risk_recheck_admin',
+            'password' => 'secret-123',
+            'email' => 'article-risk-recheck@example.com',
+            'display_name' => 'Article Risk Recheck Admin',
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+        $category = Category::query()->create([
+            'name' => '风险复检分类',
+            'slug' => 'risk-recheck-category',
+        ]);
+        $author = Author::query()->create(['name' => 'Risk Recheck Author']);
+        $article = Article::query()->create([
+            'title' => '待复检文章',
+            'slug' => 'risk-recheck-article',
+            'excerpt' => '摘要',
+            'content' => '安全正文。',
+            'category_id' => $category->id,
+            'author_id' => $author->id,
+            'status' => 'draft',
+            'review_status' => 'pending',
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.articles.risk-scan', ['articleId' => $article->id]))
+            ->assertRedirect(route('admin.articles.edit', ['articleId' => $article->id]));
+
+        $this->assertDatabaseHas('article_risk_scans', [
+            'article_id' => (int) $article->id,
+            'status' => 'clean',
+            'trigger' => 'admin_recheck',
+            'admin_id' => (int) $admin->id,
+        ]);
+    }
+
     public function test_admin_can_export_article_editor_wechat_html(): void
     {
         $admin = Admin::query()->create([
@@ -300,6 +510,10 @@ class AdminArticlesPageTest extends TestCase
         $this->assertStringStartsWith('/storage/uploads/images/', $url);
         $this->assertSame(1, ImageLibrary::query()->where('name', '文章编辑器图片')->count());
         $this->assertSame(1, Image::query()->where('original_name', 'GEOFlow 编辑器截图')->count());
+        $this->assertMatchesRegularExpression(
+            '/^[a-f0-9]{64}$/',
+            (string) Image::query()->where('original_name', 'GEOFlow 编辑器截图')->value('managed_path_hash'),
+        );
         $this->assertSame(1, ArticleImage::query()->where('article_id', (int) $article->id)->count());
 
         Storage::disk('public')->assertExists(ltrim(substr($url, strlen('/storage/')), '/'));
@@ -746,6 +960,47 @@ class AdminArticlesPageTest extends TestCase
             ->assertSee(__('admin.articles.action.view_local'))
             ->assertSee(route('site.article', ['slug' => (string) $article->slug]), false)
             ->assertDontSee(route('site.article', ['slug' => 'draft-local-view-button-article']), false);
+    }
+
+    public function test_article_list_renders_local_link_with_root_category_permalink(): void
+    {
+        $admin = Admin::query()->create([
+            'username' => 'articles_category_permalink_admin',
+            'password' => 'secret-123',
+            'email' => 'articles-category-permalink@example.com',
+            'display_name' => 'Articles Category Permalink Admin',
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+        $category = Category::query()->create([
+            'name' => '分类固定链接',
+            'slug' => 'category-permalink',
+        ]);
+        $author = Author::query()->create([
+            'name' => 'GEOFlow',
+        ]);
+        Article::query()->create([
+            'title' => '分类固定链接文章',
+            'slug' => 'category-permalink-article',
+            'excerpt' => '摘要',
+            'content' => '正文',
+            'category_id' => $category->id,
+            'author_id' => $author->id,
+            'status' => 'published',
+            'review_status' => 'approved',
+            'published_at' => now(),
+        ]);
+        $policy = ArticlePermalinkPolicy::defaults()->activate('/{category}/{slug}');
+        SiteSetting::query()->create([
+            'setting_key' => ArticlePermalinkPolicy::SETTING_KEY,
+            'setting_value' => json_encode($policy->toArray(), JSON_THROW_ON_ERROR),
+        ]);
+        SiteSettingsBag::forget();
+
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.articles.index'))
+            ->assertOk()
+            ->assertSee('/category-permalink/category-permalink-article', false);
     }
 
     public function test_article_batch_urls_are_relative_when_app_url_differs_from_origin(): void

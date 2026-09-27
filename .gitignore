@@ -1,5 +1,7 @@
 *.log
 .DS_Store
+__pycache__/
+*.py[cod]
 /bak
 /docker-data
 /logs
@@ -11,6 +13,7 @@
 .phpactor.json
 .phpunit.result.cache
 /.fleet
+.geoflow.json
 /.idea
 /.nova
 /.phpunit.cache
