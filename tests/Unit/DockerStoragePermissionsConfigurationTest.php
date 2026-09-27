@@ -307,6 +307,61 @@ SH;
         );
     }
 
+    /**
+     * 预构建编排与生产编排一样按项目隔离资源，但继续使用已拉取的应用镜像。
+     */
+    public function test_prebuilt_compose_renders_distinct_project_resources_without_fixed_container_names(): void
+    {
+        $docker = new Process(['docker', 'compose', 'version']);
+        $docker->run();
+
+        if (! $docker->isSuccessful()) {
+            $this->markTestSkipped('Docker Compose is required to verify rendered deployment configuration.');
+        }
+
+        $root = dirname(__DIR__, 2);
+        $sharedImages = [
+            'GEOFLOW_APP_IMAGE' => 'registry.example/geoflow-app-prod:latest',
+            'GEOFLOW_WEB_IMAGE' => 'registry.example/geoflow-web-prod:latest',
+        ];
+        $first = $this->renderCompose($root, 'docker-compose.prebuilt.yml', [
+            ...$sharedImages,
+            'DOCKER_NETWORK_NAME' => 'geoflow-a-net',
+            'DOCKER_NETWORK_SUBNET' => '10.89.0.0/16',
+            'DOCKER_NETWORK_GATEWAY' => '10.89.0.1',
+            'WEB_PORT' => '18081',
+            'POSTGRES_DATA_DIR' => './docker-data/prod-a/postgres',
+        ], 'geoflow-a');
+        $second = $this->renderCompose($root, 'docker-compose.prebuilt.yml', [
+            ...$sharedImages,
+            'DOCKER_NETWORK_NAME' => 'geoflow-b-net',
+            'DOCKER_NETWORK_SUBNET' => '10.90.0.0/16',
+            'DOCKER_NETWORK_GATEWAY' => '10.90.0.1',
+            'WEB_PORT' => '18082',
+            'POSTGRES_DATA_DIR' => './docker-data/prod-b/postgres',
+        ], 'geoflow-b');
+
+        $this->assertSame('geoflow-a', $first['name'] ?? null);
+        $this->assertSame('geoflow-b', $second['name'] ?? null);
+        $this->assertSame('registry.example/geoflow-app-prod:latest', $first['services']['app']['image'] ?? null);
+        $this->assertSame('registry.example/geoflow-web-prod:latest', $first['services']['web']['image'] ?? null);
+        $this->assertSame($first['services']['app']['image'] ?? null, $second['services']['app']['image'] ?? null);
+        $this->assertSame('geoflow-a-net', $first['networks']['default']['name'] ?? null);
+        $this->assertSame('geoflow-b-net', $second['networks']['default']['name'] ?? null);
+        $this->assertSame('18081', $first['services']['web']['ports'][0]['published'] ?? null);
+        $this->assertSame('18082', $second['services']['web']['ports'][0]['published'] ?? null);
+
+        foreach ([$first, $second] as $rendered) {
+            foreach ($rendered['services'] ?? [] as $service => $configuration) {
+                $this->assertArrayNotHasKey(
+                    'container_name',
+                    $configuration,
+                    sprintf('Prebuilt service %s must use the Compose project prefix.', $service)
+                );
+            }
+        }
+    }
+
     public function test_compose_renders_the_operator_storage_permission_override_when_available(): void
     {
         $docker = new Process(['docker', 'compose', 'version']);

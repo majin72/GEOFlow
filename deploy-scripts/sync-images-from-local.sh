@@ -22,7 +22,7 @@ fi
 default_images=(
   composer:2
   php:8.4-fpm-bookworm
-  nginx:1.31.1-alpine
+  nginx:1.31.4-alpine
   pgvector/pgvector:pg18
   redis:8-alpine
 )
