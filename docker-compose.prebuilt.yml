@@ -24,18 +24,18 @@ services:
     container_name: geoflow-redis-prod
     environment:
       REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
-    # 官方镜像默认以 redis 用户运行。绑定目录由 Compose 创建时属主是 root，先改属主再降权，否则 AOF 写不进 /data。
+    # 以 root 启动，镜像入口脚本才会修改 /data 属主并降权。降权工具由镜像自带的 docker-entrypoint.sh 决定。
     user: "0:0"
     command:
       - /bin/sh
-      - -lc
+      - -c
       - |
         set -eu
-        find /data ! -user redis -exec chown redis '{}' +
+        set -- redis-server --appendonly yes --dir /data
         if [ -n "$${REDIS_PASSWORD:-}" ]; then
-          exec su-exec redis redis-server --appendonly yes --dir /data --requirepass "$${REDIS_PASSWORD}"
+          set -- "$$@" --requirepass "$${REDIS_PASSWORD}"
         fi
-        exec su-exec redis redis-server --appendonly yes --dir /data
+        exec /usr/local/bin/docker-entrypoint.sh "$$@"
     volumes:
       - ${REDIS_DATA_DIR:-./docker-data/prod/redis}:/data
     healthcheck:

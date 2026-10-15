@@ -253,7 +253,9 @@ SH;
             );
             $this->assertStringContainsString('--appendonly yes', $redis, $composeFile);
             $this->assertStringContainsString('--dir /data', $redis, $composeFile);
-            $this->assertStringContainsString('su-exec redis redis-server', $redis, $composeFile);
+            $this->assertStringContainsString('user: "0:0"', $redis, $composeFile);
+            $this->assertStringContainsString('exec /usr/local/bin/docker-entrypoint.sh "$$@"', $redis, $composeFile);
+            $this->assertStringNotContainsString('su-exec', $redis, $composeFile);
         }
     }
 
