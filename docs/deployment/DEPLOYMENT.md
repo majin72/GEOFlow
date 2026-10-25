@@ -223,7 +223,10 @@ mkdir "$REDIS_MIGRATION_BACKUP/data"
 docker cp "$REDIS_OLD_CONTAINER:/data/." "$REDIS_MIGRATION_BACKUP/data/"
 
 mkdir -p "$REDIS_DATA_PATH"
-test -z "$(find "$REDIS_DATA_PATH" -mindepth 1 -maxdepth 1 -print -quit)"
+REDIS_DATA_PATH=$(cd "$REDIS_DATA_PATH" && pwd -P)
+test "$REDIS_DATA_PATH" != /
+REDIS_EXISTING_ENTRY=$(find "$REDIS_DATA_PATH" -mindepth 1 -maxdepth 1 -print -quit)
+test -z "$REDIS_EXISTING_ENTRY"
 cp -a "$REDIS_MIGRATION_BACKUP/data/." "$REDIS_DATA_PATH/"
 ```
 
